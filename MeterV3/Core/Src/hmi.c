@@ -3,15 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static uint8_t rx_byte, rx_command;
-static volatile uint8_t parser;
-static volatile uint8_t rx_fault;
-static volatile HmiRequest pending_request;
-volatile uint32_t g_hmi_rx_errors;
-
-typedef enum { VIEW_UNKNOWN, VIEW_NORMAL, VIEW_DIAGNOSTIC } HmiView;
-static HmiView current_view = VIEW_UNKNOWN;
-
 static HAL_StatusTypeDef command(const char *s)
 {
     uint8_t data[96];
@@ -59,21 +50,16 @@ static void fixed2(char *b, size_t size, float value, float scale, const char *u
     snprintf(b, size, "%s%lu.%02lu%s", sign, m / 100UL, m % 100UL, unit);
 }
 
-HAL_StatusTypeDef Hmi_Init(void)
+
+static uint8_t rx_byte;
+static volatile uint8_t parser, rx_fault, requested;
+
+void Hmi_Init(void)
 {
-    parser = 0;
-    rx_fault = 0;
-    pending_request = HMI_REQUEST_NONE;
-    current_view = VIEW_UNKNOWN;
+    parser = requested = rx_fault = 0;
     if (HAL_UART_Receive_IT(&huart1, &rx_byte, 1) != HAL_OK)
-    {
         rx_fault = 1;
-        return HAL_ERROR;
-    }
-    if (command("page 0") != HAL_OK)
-        return HAL_ERROR;
-    current_view = VIEW_NORMAL;
-    return HAL_OK;
+    command("page 0");
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *h)
@@ -81,28 +67,23 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *h)
     if (h->Instance != USART1)
         return;
 
-    /* 屏幕只发3字节按钮命令：A5 01 5A测量，A5 02 5A切换诊断。
-     * 中断里只识别这3个字节、保存请求，不计算、不向屏幕发送。
-     */
-    if (parser == 0) /* 等帧头。 */
+    /* 只接受按钮命令A5 01 5A；这里只保存请求，采样留给主循环。 */
+    if (parser == 0)
     {
         if (rx_byte == 0xA5)
             parser = 1;
     }
-    else if (parser == 1) /* 等命令编号。 */
+    else if (parser == 1)
     {
-        if (rx_byte == 1 || rx_byte == 2)
-        {
-            rx_command = rx_byte;
+        if (rx_byte == 0x01)
             parser = 2;
-        }
         else if (rx_byte != 0xA5)
             parser = 0;
     }
-    else /* 等帧尾。错误字节若是A5，就把它当作下一帧的开头。 */
+    else
     {
         if (rx_byte == 0x5A)
-            pending_request = (HmiRequest)rx_command;
+            requested = 1;
         parser = 0;
         if (rx_byte == 0xA5)
             parser = 1;
@@ -114,66 +95,29 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *h)
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *h)
 {
     if (h->Instance == USART1)
-    {
-        ++g_hmi_rx_errors;
         rx_fault = 1;
-    }
 }
 
-HmiRequest Hmi_TakeRequest(void)
+uint8_t Hmi_TakeRequest(void)
 {
-    HmiRequest request;
+    uint8_t request;
     uint32_t mask;
     if (rx_fault)
     {
+        /* 串口出错后重新接收，避免一次接触不良使按钮以后一直失效。 */
         HAL_UART_AbortReceive(&huart1);
-        parser = 0;
-        pending_request = HMI_REQUEST_NONE;
-        rx_fault = 0;
+        parser = requested = rx_fault = 0;
         if (HAL_UART_Receive_IT(&huart1, &rx_byte, 1) != HAL_OK)
             rx_fault = 1;
     }
-
-    /* 取走并清空请求必须一起完成，避免清空时把刚到的新请求也抹掉。
-     * 这里只关中断几条指令，并恢复进入前的状态，不覆盖上层的关中断设置。
-     */
+    /* 取走与清空一起完成，避免清空时抹掉中断刚收到的新请求。 */
     mask = __get_PRIMASK();
     __disable_irq();
-    request = pending_request;
-    pending_request = HMI_REQUEST_NONE;
+    request = requested;
+    requested = 0;
     __set_PRIMASK(mask);
     return request;
 }
-
-static HAL_StatusTypeDef select_view(uint8_t diagnostic)
-{
-    const char *names[] = {"t0", "t1", "t2", "t3"};
-    const char *labels[] = {"S1 DC/mV", "S1 ALL", "S1 Vpp", "S2 DC/mV"};
-    unsigned i;
-    if (diagnostic)
-    {
-        if (current_view == VIEW_DIAGNOSTIC)
-            return HAL_OK;
-        current_view = VIEW_UNKNOWN;
-        for (i = 0; i < 4; ++i)
-        {
-            if (text(names[i], labels[i]) != HAL_OK)
-                return HAL_ERROR;
-        }
-        current_view = VIEW_DIAGNOSTIC;
-    }
-    else if (current_view != VIEW_NORMAL)
-    {
-        /* 退出诊断时重载一次，恢复你在HMI里设置的标题。
-         * 正常刷新不重载页面，避免闪屏和覆盖你修改的标题。
-         */
-        if (command("page 0") != HAL_OK)
-            return HAL_ERROR;
-        current_view = VIEW_NORMAL;
-    }
-    return HAL_OK;
-}
-
 static const char *reason(uint32_t flags)
 {
     if (flags & MEAS_FLAG_CAPTURE)
@@ -202,53 +146,24 @@ static uint32_t voltage_flags(const MeterResult *r, unsigned ch)
            (r->channel_flags[ch] & (MEAS_FLAG_LOW | MEAS_FLAG_CLIP));
 }
 
-static HAL_StatusTypeDef show_normal(const MeterResult *r)
+
+void Hmi_Show(const MeterResult *r)
 {
-    uint32_t capture_error = r->flags & MEAS_FLAG_CAPTURE;
     uint32_t frequency_error = r->channel_flags[0];
-    /* 频率栏有FREQ时优先提示NO FREQ，让它与幅值栏的CLIP明确区分。 */
     if (frequency_error & MEAS_FLAG_FREQ)
         frequency_error = MEAS_FLAG_FREQ;
+    frequency_error |= r->flags & MEAS_FLAG_CAPTURE;
 
+    /* 发送失败就结束本次刷新，下一帧再发；不让屏幕通信阻止后续采样。 */
     if (show_value("t4", r->ac_rms_v[0], 1000, "mV", voltage_flags(r, 0)) != HAL_OK)
-        return HAL_ERROR;
+        return;
     if (show_value("t5", r->ac_rms_v[1], 1000, "mV", voltage_flags(r, 1)) != HAL_OK)
-        return HAL_ERROR;
-    if (show_value("t6", r->frequency_hz[0], 1, "Hz", capture_error | frequency_error) != HAL_OK)
-        return HAL_ERROR;
-    return show_value("t7", r->phase_deg, 1, "deg", r->flags);
-}
-
-static HAL_StatusTypeDef show_diagnostic(const MeterResult *r)
-{
-    uint32_t flags = r->flags & MEAS_FLAG_CAPTURE;
-    /* 诊断时保留原始计算量，帮助区分直流、交流RMS和总RMS。 */
-    if (show_value("t4", r->dc_v[0], 1000, "mV", flags) != HAL_OK)
-        return HAL_ERROR;
-    if (show_value("t5", r->total_rms_v[0], 1000, "mV", flags) != HAL_OK)
-        return HAL_ERROR;
-    if (show_value("t6", r->vpp_v[0], 1000, "mV", flags) != HAL_OK)
-        return HAL_ERROR;
-    return show_value("t7", r->dc_v[1], 1000, "mV", flags);
-}
-
-HAL_StatusTypeDef Hmi_Show(const MeterResult *r, uint8_t diagnostic)
-{
-    if (select_view(diagnostic) != HAL_OK)
-        return HAL_ERROR;
-    if (diagnostic)
-    {
-        if (show_diagnostic(r) != HAL_OK)
-            return HAL_ERROR;
-    }
-    else
-    {
-        if (show_normal(r) != HAL_OK)
-            return HAL_ERROR;
-    }
-
-    /* 这两个控件始终显示本路Vpp，S1出问题不会连带隐藏正常的S2。 */
+        return;
+    if (show_value("t6", r->frequency_hz[0], 1, "Hz", frequency_error) != HAL_OK)
+        return;
+    if (show_value("t7", r->phase_deg, 1, "deg", r->flags) != HAL_OK)
+        return;
     if (show_value("t9", r->vpp_v[0], 1000, "mV", voltage_flags(r, 0)) != HAL_OK)
-        return HAL_ERROR;
-    return show_value("t11", r->vpp_v[1], 1000, "mV", voltage_flags(r, 1));
+        return;
+    show_value("t11", r->vpp_v[1], 1000, "mV", voltage_flags(r, 1));
 }

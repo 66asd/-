@@ -109,7 +109,7 @@ HAL_StatusTypeDef AD9833_SetOutput(uint32_t frequency_hz, AD9833_WaveType wave)
     return AD9833_Write16(control);
 }
 
-HAL_StatusTypeDef AD9833_Init(void)
+void AD9833_Init(void)
 {
     HAL_GPIO_WritePin(AD9833_FSYNC_GPIO_Port, AD9833_FSYNC_Pin, GPIO_PIN_SET);
 
@@ -117,5 +117,4 @@ HAL_StatusTypeDef AD9833_Init(void)
     HAL_Delay(10U);
 
     /* 这里只准备硬件。频率和波形由App_Init统一设置，避免前后两次设置互相覆盖。 */
-    return HAL_OK;
 }

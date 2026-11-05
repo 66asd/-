@@ -3,17 +3,8 @@
 #include "main.h"
 #include "signal_math.h"
 
-typedef enum
-{
-    HMI_REQUEST_NONE = 0,
-    HMI_REQUEST_MEASURE = 1,
-    HMI_REQUEST_DIAGNOSTIC = 2
-} HmiRequest;
-
-HAL_StatusTypeDef Hmi_Init(void);
-/* 多次按钮请求只保留最新一条，避免测量任务排成长队。 */
-HmiRequest Hmi_TakeRequest(void);
-/* 正常t4/t5=两路AC RMS，t6=频率，t7=相位；t9/t11始终为两路Vpp。 */
-HAL_StatusTypeDef Hmi_Show(const MeterResult *r, uint8_t diagnostic);
-extern volatile uint32_t g_hmi_rx_errors;
+void Hmi_Init(void);
+uint8_t Hmi_TakeRequest(void); /* 取走一次屏幕测量请求，没有请求时返回0。 */
+/* t4/t5为两路AC RMS，t6频率，t7相位，t9/t11为两路Vpp；电压显示mV。 */
+void Hmi_Show(const MeterResult *r);
 #endif

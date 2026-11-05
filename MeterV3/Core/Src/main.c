@@ -1,5 +1,4 @@
-﻿
-/**
+﻿/**
   ******************************************************************************
   * @file           : main.c
   * @brief          : Main program body
@@ -19,7 +18,6 @@
 #include "main.h"
 #include "adc.h"
 #include "dma.h"
-#include "iwdg.h"
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
@@ -52,7 +50,6 @@ int main(void)
   MX_ADC2_Init();
   MX_TIM3_Init(); /* 只配置采样节拍，Capture_Begin才真正启动计数。 */
   MX_USART1_UART_Init();
-  MX_IWDG_Init();
 
   App_Init();
 
@@ -62,7 +59,6 @@ int main(void)
   {
 
     App_Poll(); /* 推进采集、计算、显示；没采满时会返回，不在这里死等。 */
-    HAL_Delay(1); /* 前台稍后再查询；延时单位ms，TIM3/ADC/DMA仍独立运行。 */
   }
 
 }
@@ -80,11 +76,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
@@ -128,19 +122,3 @@ void Error_Handler(void)
   }
 
 }
-#ifdef USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
-
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-
-}
-#endif /* USE_FULL_ASSERT */

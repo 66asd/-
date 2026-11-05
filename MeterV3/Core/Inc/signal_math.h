@@ -12,22 +12,16 @@ typedef struct
 {
     float vdda_v;
     float gain[2];
-    float offset_v[2];
 } MeterCalibration;
 
 /* 数组下标0是S1，1是S2。电压统一存V，发屏幕时才换成mV。 */
 typedef struct
 {
     float ac_rms_v[2];
-    float dc_v[2];
     float frequency_hz[2];
     float phase_deg;
     uint32_t flags;
-    uint32_t elapsed_ms;
     uint32_t channel_flags[2];
-    float min_v[2];
-    float max_v[2];
-    float total_rms_v[2];
     float vpp_v[2];
 } MeterResult;
 

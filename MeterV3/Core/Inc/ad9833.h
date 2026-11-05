@@ -14,7 +14,7 @@ typedef enum
 } AD9833_WaveType;
 
 /* 准备FSYNC并等待模块上电，输出参数随后由App_Init统一设置。 */
-HAL_StatusTypeDef AD9833_Init(void);
+void AD9833_Init(void);
 
 /* 本接口使用整数 Hz；每次配置会短暂复位输出 */
 HAL_StatusTypeDef AD9833_SetOutput(uint32_t frequency_hz, AD9833_WaveType wave);

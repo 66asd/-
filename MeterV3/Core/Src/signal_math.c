@@ -98,11 +98,6 @@ static void voltage_results(const uint32_t *p, uint32_t start, uint32_t end,
         variance = 0; /* 浮点舍入可能得到极小负数，不能直接开方。 */
 
     r->ac_rms_v[ch] = sqrtf(variance) * step;
-    r->dc_v[ch] = (x->mean + mean) * step + cal->offset_v[ch];
-    r->total_rms_v[ch] = sqrtf(r->dc_v[ch] * r->dc_v[ch] +
-                                   r->ac_rms_v[ch] * r->ac_rms_v[ch]);
-    r->min_v[ch] = x->lo * step + cal->offset_v[ch];
-    r->max_v[ch] = x->hi * step + cal->offset_v[ch];
     r->vpp_v[ch] = (x->hi - x->lo) * step;
 }
 

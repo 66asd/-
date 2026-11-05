@@ -14,7 +14,5 @@
 #define METER_VDDA_V              3.300f
 #define METER_GAIN_S1             1.000f
 #define METER_GAIN_S2             1.000f
-#define METER_OFFSET_S1_V         0.000f
-#define METER_OFFSET_S2_V         0.000f
 
 #endif

@@ -1,5 +1,4 @@
-﻿
-/**
+﻿/**
   ******************************************************************************
   * @file           : main.h
   * @brief          : Header for main.c file.
@@ -30,8 +29,6 @@ void Error_Handler(void);
 
 #define AD9833_FSYNC_Pin GPIO_PIN_4
 #define AD9833_FSYNC_GPIO_Port GPIOA
-#define MEASURE_KEY_Pin GPIO_PIN_0
-#define MEASURE_KEY_GPIO_Port GPIOB
 
 #ifdef __cplusplus
 }
