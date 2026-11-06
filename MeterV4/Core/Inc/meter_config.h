@@ -16,7 +16,7 @@
  * 系数固定，不按每帧读数反推；换板、换前端后需重新校准。
  * RMS和Vpp共用同一系数，保持电压尺度一致；设回1.0f可单看算法结果。
  */
-#define METER_GAIN_S1             0.98104366f
-#define METER_GAIN_S2             0.98112830f
+#define METER_GAIN_S1             0.98590665f
+#define METER_GAIN_S2             0.98731986f
 
 #endif
