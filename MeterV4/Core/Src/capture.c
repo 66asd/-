@@ -8,6 +8,7 @@ static volatile uint8_t dma_done, dma_error;
 static CaptureState state = CAPTURE_IDLE;
 static uint32_t started_ms;
 static float reference_voltage;
+static uint32_t reference_before;
 
 static void stop_capture(void)
 {
@@ -32,8 +33,8 @@ static HAL_StatusTypeDef fail_capture(void)
     return HAL_ERROR;
 }
 
-/* 在定时器和DMA启动前测内部参考，避免打断两路同步采样。 */
-static HAL_StatusTypeDef measure_reference(void)
+/* 只在定时器停止时测参考，不打断两路同步采样。 */
+static HAL_StatusTypeDef measure_reference(uint32_t *codes)
 {
     uint32_t i, sum = 0;
     HAL_StatusTypeDef status = HAL_OK;
@@ -47,16 +48,16 @@ static HAL_StatusTypeDef measure_reference(void)
         if (status != HAL_OK) break;
         sum += HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
     }
-    if (HAL_ADCEx_InjectedStop(&hadc1) != HAL_OK)
+    if (HAL_ADC_Stop(&hadc1) != HAL_OK)
         status = HAL_ERROR;
     CLEAR_BIT(hadc1.Instance->CR2, ADC_CR2_TSVREFE);
     if (status != HAL_OK || sum == 0U)
         return HAL_ERROR;
 
-    /* 64次平均减小参考通道噪声。只由内部参考读数换算，不使用目标Vpp。 */
-    reference_voltage = METER_VREFINT_TYP_V * 4096.0f * 64U / sum;
-    if (reference_voltage < 2.0f || reference_voltage > 3.6f)
+    if (sum < METER_VREFINT_TYP_V * 4096.0f * 64U / 3.6f ||
+        sum > METER_VREFINT_TYP_V * 4096.0f * 64U / 2.0f)
         return HAL_ERROR;
+    *codes = sum;
     return HAL_OK;
 }
 
@@ -95,7 +96,7 @@ HAL_StatusTypeDef Capture_Begin(void)
     if (HAL_ADC_Start(&hadc2) != HAL_OK)
         return fail_capture();
     /* 先让ADC2就绪，在接近正式采样的负载状态下读取内部参考。 */
-    if (measure_reference() != HAL_OK)
+    if (measure_reference(&reference_before) != HAL_OK)
         return fail_capture();
     if (HAL_ADCEx_MultiModeStart_DMA(&hadc1, samples, METER_SAMPLE_COUNT) != HAL_OK)
         return fail_capture();
@@ -111,7 +112,7 @@ HAL_StatusTypeDef Capture_Begin(void)
 
 CaptureState Capture_Poll(void)
 {
-    uint32_t remaining;
+    uint32_t remaining, reference_after;
     if (state != CAPTURE_PENDING)
         return state;
 
@@ -125,10 +126,16 @@ CaptureState Capture_Poll(void)
         return CAPTURE_PENDING;
 
     remaining = __HAL_DMA_GET_COUNTER(hadc1.DMA_Handle);
+    if (remaining != 0U || measure_reference(&reference_after) != HAL_OK)
+    {
+        fail_capture();
+        return state;
+    }
+    /* 前、后两次参考读数取平均，估计信号采样期间的参考电压。 */
+    reference_voltage = METER_VREFINT_TYP_V * 4096.0f * 128U /
+                        (reference_before + reference_after);
     stop_capture();
     state = CAPTURE_DONE;
-    if (remaining != 0U)
-        state = CAPTURE_FAILED; /* 没收满2048对样本，不能交给算法计算。 */
     return state;
 }
 

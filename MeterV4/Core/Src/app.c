@@ -18,12 +18,7 @@ static void start_measurement(void)
     busy = 1; /* 内部参考的读取也属于本轮测量，先标忙再清空结果。 */
     /* 新帧失败或提前结束时，不能把上一帧未更新的字段当作本轮结果。 */
     memset(&result, 0, sizeof(result));
-    if (Capture_Begin() == HAL_OK)
-    {
-        /* 与本帧配套的参考电压；不再把VDDA固定当成3.300V。 */
-        calibration.vdda_v = Capture_ReferenceVoltage();
-    }
-    else
+    if (Capture_Begin() != HAL_OK)
     {
         busy = 0;
         result.flags = MEAS_FLAG_CAPTURE;
@@ -62,7 +57,11 @@ void App_Poll(void)
         return;
 
     if (state == CAPTURE_DONE)
+    {
+        /* 使用本帧前后配套的参考读数，避免复用上一帧电压。 */
+        calibration.vdda_v = Capture_ReferenceVoltage();
         Signal_Analyze(Capture_Data(), METER_SAMPLE_COUNT, Capture_SampleRate(), &calibration, &result);
+    }
     else
         result.flags = MEAS_FLAG_CAPTURE;
 
