@@ -1,4 +1,4 @@
-#include "signal_math.h"
+﻿#include "signal_math.h"
 #include <math.h>
 #include <string.h>
 
@@ -78,21 +78,35 @@ static float frequency(const uint32_t *p, uint32_t count, unsigned ch,
 }
 
 
-static float trimmed_span(const uint32_t *p, uint32_t count, unsigned ch)
+
+static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch, float fs, float hz)
 {
-    /* shortcut: 2048点各舍弃两端10点；改变帧长时，应一起调整这个数量。
-     * 只保存最小/最大各11点，避免复制整帧或占用大块RAM。
-     */
-    uint16_t low[11], high[11], v;
-    uint32_t i, j;
+    float low[11], high[11], v, scale;
+    uint32_t i, j, sum = 0, window = 1;
+
+    /* 窗口不超过约1/60周期、最多5点。高频退为1点，避免平滑压低真实峰值。 */
+    if (hz >= CHECK_MIN_HZ && hz <= CHECK_MAX_HZ)
+    {
+        window = (uint32_t)(fs / (60 * hz));
+        if (window > 5)
+            window = 5;
+        if (window < 1)
+            window = 1;
+        if ((window & 1U) == 0)
+            --window;
+    }
+    scale = 1.0f / window;
+    for (i = 0; i < window; ++i)
+        sum += (p[i] >> (ch * 16U)) & 0xFFFU;
     for (j = 0; j < 11; ++j)
     {
         low[j] = 4095;
         high[j] = 0;
     }
-    for (i = 0; i < count; ++i)
+
+    for (i = window - 1U; i < count; ++i)
     {
-        v = (uint16_t)((p[i] >> (ch * 16U)) & 0xFFFU);
+        v = sum * scale;
         if (v < low[10])
         {
             for (j = 10; j > 0 && v < low[j - 1]; --j)
@@ -105,72 +119,17 @@ static float trimmed_span(const uint32_t *p, uint32_t count, unsigned ch)
                 high[j] = high[j - 1];
             high[j] = v;
         }
-    }
-    /* 第11大减第11小，少量孤立尖峰不会再直接决定Vpp。
-     * 不修改样本，也不滤波，因此RMS、频率和相位仍用原来的数据。
-     */
-    return (float)high[10] - low[10];
-}
-
-
-static float sine_span(const uint32_t *p, uint32_t count, unsigned ch, float fs, float hz)
-{
-    unsigned pass;
-    uint32_t i, n;
-    float cs, sn, c, s, next_c, v;
-    float sc, ss, cc, zz, cz, sx, xc, xs, det;
-    float a = 0, b = 0, dc = 0, amplitude = 0, limit = 0;
-    if (hz < CHECK_MIN_HZ || hz > CHECK_MAX_HZ)
-        return 0;
-    cs = cosf(2 * PI_F * hz / fs);
-    sn = sinf(2 * PI_F * hz / fs);
-
-    /* 第一次拟合整帧；第二次排除异常点再拟合，避免少数尖峰拉高幅度。 */
-    for (pass = 0; pass < 2; ++pass)
-    {
-        n = 0;
-        sc = ss = cc = zz = cz = sx = xc = xs = 0;
-        c = 1;
-        s = 0;
-        for (i = 0; i < count; ++i)
+        if (i + 1U < count)
         {
-            v = sample(p, i, ch);
-            if (pass == 0 || fabsf(v - dc - a * c - b * s) <= limit)
-            {
-                ++n;
-                sc += c;
-                ss += s;
-                cc += c * c;
-                zz += s * s;
-                cz += c * s;
-                sx += v;
-                xc += v * c;
-                xs += v * s;
-            }
-            next_c = c * cs - s * sn;
-            s = s * cs + c * sn;
-            c = next_c;
+            /* 滑动时只移出最旧一点、加入最新一点，不反复重算整个窗口。 */
+            sum -= (p[i + 1U - window] >> (ch * 16U)) & 0xFFFU;
+            sum += (p[i + 1U] >> (ch * 16U)) & 0xFFFU;
         }
-        /* shortcut: 至少90%样本符合正弦模型才使用；其他波形返回截断极值法。 */
-        if (n < count - count / 10U)
-            return 0;
-        cc -= sc * sc / n;
-        zz -= ss * ss / n;
-        cz -= sc * ss / n;
-        xc -= sx * sc / n;
-        xs -= sx * ss / n;
-        det = cc * zz - cz * cz;
-        if (det < 1)
-            return 0;
-        a = (xc * zz - xs * cz) / det;
-        b = (xs * cc - xc * cz) / det;
-        dc = (sx - a * sc - b * ss) / n;
-        amplitude = sqrtf(a * a + b * b);
-        limit = amplitude * 0.06f;
-        if (limit < 1)
-            limit = 1; /* 保留ADC量化舍入带来的正常波动。 */
     }
-    return 2 * amplitude;
+    /* shortcut: 按2048点舍弃最高/最低各10点；改变帧长时一起调整。
+     * 这里只读样本，RMS、频率和相位继续使用未滤波的数据。
+     */
+    return high[10] - low[10];
 }
 
 static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, uint32_t end,
@@ -194,10 +153,7 @@ static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, u
         variance = 0; /* 浮点舍入可能得到极小负数，不能直接开方。 */
 
     r->ac_rms_v[ch] = sqrtf(variance) * step;
-    /* 只为Vpp拟合，不改原始样本和其他测量。没有600mV等预设目标值。 */
-    span = sine_span(p, count, ch, fs, r->frequency_hz[ch]);
-    if (span <= 0)
-        span = trimmed_span(p, count, ch);
+    span = filtered_span(p, count, ch, fs, r->frequency_hz[ch]);
     r->vpp_v[ch] = span * step;
 }
 
