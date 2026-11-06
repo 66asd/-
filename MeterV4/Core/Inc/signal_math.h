@@ -11,7 +11,6 @@
 typedef struct
 {
     float vdda_v;
-    float gain[2];
 } MeterCalibration;
 
 /* 数组下标0是S1，1是S2。电压统一存V，发屏幕时才换成mV。 */

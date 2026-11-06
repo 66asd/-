@@ -7,7 +7,7 @@
 #include <string.h>
 
 static const MeterCalibration calibration = {
-    METER_VDDA_V, {METER_GAIN_S1, METER_GAIN_S2}
+    METER_VDDA_V
 };
 static MeterResult result;
 static uint8_t busy, requested;

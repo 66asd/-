@@ -10,10 +10,7 @@
 #define METER_UPDATE_PERIOD_MS    250U
 #define METER_CAPTURE_TIMEOUT_MS  100U
 
-/* ADC码值换算为实际输入电压。这里用实测供电和校准值，不凭预期读数放大。 */
+/* ADC参考电压；填写实际VDDA，不按期望Vpp反推这个值。 */
 #define METER_VDDA_V              3.300f
-/* 两路系数均为1，只比较算法，不用固定系数修正幅值。 */
-#define METER_GAIN_S1             1.000f
-#define METER_GAIN_S2             1.000f
 
 #endif
