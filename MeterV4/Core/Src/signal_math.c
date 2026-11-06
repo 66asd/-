@@ -85,7 +85,7 @@ static uint32_t vpp_sample(const uint32_t *p, uint32_t count, uint32_t i,
 {
     uint32_t a, b, c, t;
     b = (p[i] >> (ch * 16U)) & 0xFFFU;
-    /* 高频每周期点数少，不做中值；首尾点交给后面的截断处理。 */
+    /* 高频每周期点数少，不做中值；首尾缺少邻点时保持原值。 */
     if (window == 1U || i == 0U || i + 1U == count)
         return b;
     a = (p[i - 1U] >> (ch * 16U)) & 0xFFFU;
@@ -174,7 +174,7 @@ static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, u
 }
 
 static void phase_difference(const uint32_t *p, uint32_t start, uint32_t end,
-                             float fs, const Channel x[2], MeterResult *r)
+                             float fs, const Channel x[2], const MeterCalibration *cal, MeterResult *r)
 {
     uint32_t i, n = end - start;
     unsigned ch;
@@ -183,7 +183,7 @@ static void phase_difference(const uint32_t *p, uint32_t start, uint32_t end,
     float c = 1, s = 0, next_c, v;
     float sc = 0, ss = 0, cc = 0, zz = 0, cz = 0;
     float xc[2] = {0}, xs[2] = {0}, sx[2] = {0};
-    float a, b, det, ph[2];
+    float a, b, det, ph[2], power[2] = {0}, energy, fitted;
 
     /* 用同一频率拟合两路：信号=A*cos+B*sin+直流。
      * c/s是当前cos/sin；xc/xs是信号分别乘cos/sin后的累加和。
@@ -201,6 +201,7 @@ static void phase_difference(const uint32_t *p, uint32_t start, uint32_t end,
             xc[ch] += v * c;
             xs[ch] += v * s;
             sx[ch] += v;
+            power[ch] += v * v;
         }
         /* 递推下一点的cos/sin，避免每个点都调用一次三角函数。 */
         next_c = c * cs - s * sn;
@@ -225,6 +226,15 @@ static void phase_difference(const uint32_t *p, uint32_t start, uint32_t end,
         a = (xc[ch] * zz - xs[ch] * cz) / det;
         b = (xs[ch] * cc - xc[ch] * cz) / det;
         ph[ch] = atan2f(-b, a);
+
+        /* 只有正弦拟合解释了99.75%以上交流能量时，才用拟合幅度求Vpp。
+         * 三角波、方波保留周期平均的峰谷差，不能套用正弦波公式。
+         */
+        energy = power[ch] - sx[ch] * sx[ch] / n;
+        fitted = a * xc[ch] + b * xs[ch];
+        if (energy > 0 && fitted >= energy * 0.9975f)
+            r->vpp_v[ch] = 2.0f * sqrtf(a * a + b * b) *
+                           cal->vdda_v / 4095.0f * cal->gain[ch];
     }
     r->phase_deg = (ph[1] - ph[0]) * 180.0f / PI_F;
     if (r->phase_deg > 180)
@@ -269,7 +279,7 @@ void Signal_Analyze(const uint32_t *p, uint32_t count, float fs,
     for (ch = 0; ch < 2; ++ch)
         voltage_results(p, count, start, end, ch, fs, &x[ch], cal, r);
 
-    /* 第三步：只有两路信号质量都合格且同频，才计算相位差。 */
+    /* 第三步：质量合格且同频时拟合相位，并用正弦拟合改善Vpp。 */
     if (r->flags != 0U)
         return;
     if (fabsf(r->frequency_hz[0] - r->frequency_hz[1]) >
@@ -278,6 +288,6 @@ void Signal_Analyze(const uint32_t *p, uint32_t count, float fs,
         r->flags |= MEAS_FLAG_FREQ;
         return;
     }
-    phase_difference(p, start, end, fs, x, r);
+    phase_difference(p, start, end, fs, x, cal, r);
 }
 
