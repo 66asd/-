@@ -4,8 +4,8 @@
 
 #define PI_F                3.14159265358979323846f
 #define MIN_SPAN_CODES      12.0f
-#define CHECK_MIN_HZ        350.0f
-#define CHECK_MAX_HZ        15000.0f
+#define CHECK_MIN_HZ        100.0f
+#define CHECK_MAX_HZ        50000.0f
 #define CROSS_LIMIT_HZ      20000.0f
 #define FREQ_TOLERANCE      0.03f
 
