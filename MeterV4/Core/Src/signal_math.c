@@ -79,6 +79,30 @@ static float frequency(const uint32_t *p, uint32_t count, unsigned ch,
 
 
 
+
+static uint32_t vpp_sample(const uint32_t *p, uint32_t count, uint32_t i,
+                           unsigned ch, uint32_t window)
+{
+    uint32_t a, b, c, t;
+    b = (p[i] >> (ch * 16U)) & 0xFFFU;
+    /* 高频每周期点数少，不做中值；首尾点交给后面的截断处理。 */
+    if (window == 1U || i == 0U || i + 1U == count)
+        return b;
+    a = (p[i - 1U] >> (ch * 16U)) & 0xFFFU;
+    c = (p[i + 1U] >> (ch * 16U)) & 0xFFFU;
+    if (a > b)
+    {
+        t = a;
+        a = b;
+        b = t;
+    }
+    if (b > c)
+        b = c;
+    if (a > b)
+        b = a;
+    return b;
+}
+
 static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch, float fs, float hz)
 {
     float low[11], high[11], v, scale;
@@ -95,9 +119,10 @@ static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch, float
         if ((window & 1U) == 0)
             --window;
     }
+    /* 先去掉孤立毛刺，再平均，避免把一个毛刺扩散成多个异常点。 */
     scale = 1.0f / window;
     for (i = 0; i < window; ++i)
-        sum += (p[i] >> (ch * 16U)) & 0xFFFU;
+        sum += vpp_sample(p, count, i, ch, window);
     for (j = 0; j < 11; ++j)
     {
         low[j] = 4095;
@@ -122,8 +147,8 @@ static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch, float
         if (i + 1U < count)
         {
             /* 滑动时只移出最旧一点、加入最新一点，不反复重算整个窗口。 */
-            sum -= (p[i + 1U - window] >> (ch * 16U)) & 0xFFFU;
-            sum += (p[i + 1U] >> (ch * 16U)) & 0xFFFU;
+            sum -= vpp_sample(p, count, i + 1U - window, ch, window);
+            sum += vpp_sample(p, count, i + 1U, ch, window);
         }
     }
     /* shortcut: 按2048点舍弃最高/最低各10点；改变帧长时一起调整。
