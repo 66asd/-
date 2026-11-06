@@ -12,7 +12,11 @@
 
 /* ADC码值换算为实际输入电压。这里用实测供电和校准值，不凭预期读数放大。 */
 #define METER_VDDA_V              3.300f
-#define METER_GAIN_S1             1.000f
-#define METER_GAIN_S2             1.000f
+/* 按用户给出的500Hz、610mV参考做单点幅值校准，两个通道分别计算。
+ * 系数固定，不按每帧读数反推；换板、换前端后需重新校准。
+ * RMS和Vpp共用同一系数，保持电压尺度一致；设回1.0f可单看算法结果。
+ */
+#define METER_GAIN_S1             0.98104366f
+#define METER_GAIN_S2             0.98112830f
 
 #endif

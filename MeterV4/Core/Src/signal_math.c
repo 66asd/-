@@ -1,4 +1,4 @@
-﻿#include "signal_math.h"
+#include "signal_math.h"
 #include <math.h>
 #include <string.h>
 
@@ -103,58 +103,49 @@ static uint32_t vpp_sample(const uint32_t *p, uint32_t count, uint32_t i,
     return b;
 }
 
-static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch, float fs, float hz)
+static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch,
+                           float fs, float hz, const Channel *x)
 {
-    float low[11], high[11], v, scale;
-    uint32_t i, j, sum = 0, window = 1;
+    uint32_t bin, cycle, cycles, i, median;
+    float period, pos, sum, a, b, v, low = 4095, high = 0;
 
-    /* 窗口不超过约1/60周期、最多5点。高频退为1点，避免平滑压低真实峰值。 */
-    if (hz >= CHECK_MIN_HZ && hz <= CHECK_MAX_HZ)
-    {
-        window = (uint32_t)(fs / (60 * hz));
-        if (window > 5)
-            window = 5;
-        if (window < 1)
-            window = 1;
-        if ((window & 1U) == 0)
-            --window;
-    }
-    /* 先去掉孤立毛刺，再平均，避免把一个毛刺扩散成多个异常点。 */
-    scale = 1.0f / window;
-    for (i = 0; i < window; ++i)
-        sum += vpp_sample(p, count, i, ch, window);
-    for (j = 0; j < 11; ++j)
-    {
-        low[j] = 4095;
-        high[j] = 0;
-    }
+    /* 没有可靠周期时不做对齐，保留幅度观察，频率错误仍由原来的标志报告。 */
+    if (hz < CHECK_MIN_HZ || hz > CHECK_MAX_HZ)
+        return x->hi - x->lo;
+    period = fs / hz;
+    cycles = (uint32_t)((x->last - x->first) / period + 0.5f);
+    if (cycles == 0U)
+        return x->hi - x->lo;
+    median = period >= 128.0f ? 3U : 1U;
 
-    for (i = window - 1U; i < count; ++i)
-    {
-        v = sum * scale;
-        if (v < low[10])
-        {
-            for (j = 10; j > 0 && v < low[j - 1]; --j)
-                low[j] = low[j - 1];
-            low[j] = v;
-        }
-        if (v > high[10])
-        {
-            for (j = 10; j > 0 && v > high[j - 1]; --j)
-                high[j] = high[j - 1];
-            high[j] = v;
-        }
-        if (i + 1U < count)
-        {
-            /* 滑动时只移出最旧一点、加入最新一点，不反复重算整个窗口。 */
-            sum -= vpp_sample(p, count, i + 1U - window, ch, window);
-            sum += vpp_sample(p, count, i + 1U, ch, window);
-        }
-    }
-    /* shortcut: 按2048点舍弃最高/最低各10点；改变帧长时一起调整。
-     * 这里只读样本，RMS、频率和相位继续使用未滤波的数据。
+    /* 一个周期分成128个相位；先平均各周期的同相位点，再找峰谷。
+     * 不把整帧中碰巧最大的噪声点当成峰值，也不需要额外的采样数组。
      */
-    return high[10] - low[10];
+    for (bin = 0; bin < 128U; ++bin)
+    {
+        pos = x->first + period * bin / 128.0f;
+        sum = 0;
+        for (cycle = 0; cycle < cycles; ++cycle)
+        {
+            i = (uint32_t)pos;
+            if (i + 1U >= count)
+                break;
+            a = (float)vpp_sample(p, count, i, ch, median);
+            b = (float)vpp_sample(p, count, i + 1U, ch, median);
+            /* 相位通常落在两个样本之间，线性插值避免直接取整造成抖动。 */
+            sum += a + (b - a) * (pos - i);
+            pos += period;
+        }
+        if (cycle == 0U)
+            continue;
+        v = sum / cycle;
+        if (v < low)
+            low = v;
+        if (v > high)
+            high = v;
+    }
+    /* shortcut: 适合稳定周期波；突发信号需要另设测量方式。 */
+    return high - low;
 }
 
 static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, uint32_t end,
@@ -178,7 +169,7 @@ static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, u
         variance = 0; /* 浮点舍入可能得到极小负数，不能直接开方。 */
 
     r->ac_rms_v[ch] = sqrtf(variance) * step;
-    span = filtered_span(p, count, ch, fs, r->frequency_hz[ch]);
+    span = filtered_span(p, count, ch, fs, r->frequency_hz[ch], x);
     r->vpp_v[ch] = span * step;
 }
 
