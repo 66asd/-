@@ -7,6 +7,7 @@ static uint32_t samples[METER_SAMPLE_COUNT];
 static volatile uint8_t dma_done, dma_error;
 static CaptureState state = CAPTURE_IDLE;
 static uint32_t started_ms;
+static float reference_voltage;
 
 static void stop_capture(void)
 {
@@ -31,15 +32,49 @@ static HAL_StatusTypeDef fail_capture(void)
     return HAL_ERROR;
 }
 
+/* 在定时器和DMA启动前测内部参考，避免打断两路同步采样。 */
+static HAL_StatusTypeDef measure_reference(void)
+{
+    uint32_t i, sum = 0;
+    HAL_StatusTypeDef status = HAL_OK;
+    SET_BIT(hadc1.Instance->CR2, ADC_CR2_TSVREFE);
+    HAL_Delay(1); /* 等待内部参考稳定，不读取刚使能时的过渡电压。 */
+    for (i = 0; i < 64U; ++i)
+    {
+        status = HAL_ADCEx_InjectedStart(&hadc1);
+        if (status != HAL_OK) break;
+        status = HAL_ADCEx_InjectedPollForConversion(&hadc1, 5);
+        if (status != HAL_OK) break;
+        sum += HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
+    }
+    if (HAL_ADCEx_InjectedStop(&hadc1) != HAL_OK)
+        status = HAL_ERROR;
+    CLEAR_BIT(hadc1.Instance->CR2, ADC_CR2_TSVREFE);
+    if (status != HAL_OK || sum == 0U)
+        return HAL_ERROR;
+
+    /* 64次平均减小参考通道噪声。只由内部参考读数换算，不使用目标Vpp。 */
+    reference_voltage = METER_VREFINT_TYP_V * 4096.0f * 64U / sum;
+    if (reference_voltage < 2.0f || reference_voltage > 3.6f)
+        return HAL_ERROR;
+    return HAL_OK;
+}
+
 HAL_StatusTypeDef Capture_Init(void)
 {
+    ADC_InjectionConfTypeDef ref = {0};
     /* 上电各校准一次，减少ADC自身偏移；这不代替外部电压校准。 */
     if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
         return HAL_ERROR;
     if (HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK)
         return HAL_ERROR;
     stop_capture();
-    return HAL_OK;
+    ref.InjectedChannel = ADC_CHANNEL_VREFINT;
+    ref.InjectedRank = ADC_INJECTED_RANK_1;
+    ref.InjectedNbrOfConversion = 1;
+    ref.InjectedSamplingTime = ADC_SAMPLETIME_239CYCLES_5;
+    ref.ExternalTrigInjecConv = ADC_INJECTED_SOFTWARE_START;
+    return HAL_ADCEx_InjectedConfigChannel(&hadc1, &ref);
 }
 
 HAL_StatusTypeDef Capture_Begin(void)
@@ -58,6 +93,9 @@ HAL_StatusTypeDef Capture_Begin(void)
     if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &mode) != HAL_OK)
         return fail_capture();
     if (HAL_ADC_Start(&hadc2) != HAL_OK)
+        return fail_capture();
+    /* 先让ADC2就绪，在接近正式采样的负载状态下读取内部参考。 */
+    if (measure_reference() != HAL_OK)
         return fail_capture();
     if (HAL_ADCEx_MultiModeStart_DMA(&hadc1, samples, METER_SAMPLE_COUNT) != HAL_OK)
         return fail_capture();
@@ -126,4 +164,9 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *h)
         __HAL_TIM_DISABLE(&htim3);
         dma_error = 1;
     }
+}
+
+float Capture_ReferenceVoltage(void)
+{
+    return reference_voltage;
 }

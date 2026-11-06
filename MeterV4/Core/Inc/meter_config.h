@@ -10,7 +10,9 @@
 #define METER_UPDATE_PERIOD_MS    250U
 #define METER_CAPTURE_TIMEOUT_MS  100U
 
-/* ADC参考电压；填写实际VDDA，不按期望Vpp反推这个值。 */
-#define METER_VDDA_V              3.300f
+/* STM32F103内部参考的典型电压，来自芯片规格，不是通道幅值修正系数。
+ * 内部参考有出厂容差，因此估算VDDA不能替代精密电压基准。
+ */
+#define METER_VREFINT_TYP_V       1.200f
 
 #endif

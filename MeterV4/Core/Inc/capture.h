@@ -17,4 +17,6 @@ CaptureState Capture_Poll(void);      /* 主循环反复查询是否完成。 */
 /* 只有DONE后可用；下一次Begin会覆盖这些数据，必须先算完当前帧。 */
 const uint32_t *Capture_Data(void);
 float Capture_SampleRate(void);
+/* 本帧开始前，用内部参考通道估算的ADC参考电压。 */
+float Capture_ReferenceVoltage(void);
 #endif
