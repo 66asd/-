@@ -1,4 +1,4 @@
-#ifndef METER_CONFIG_H
+﻿#ifndef METER_CONFIG_H
 #define METER_CONFIG_H
 
 /* 改输出只看这两项；频率单位Hz，波形可选SINE、TRIANGLE、SQUARE。 */
@@ -10,7 +10,9 @@
 #define METER_UPDATE_PERIOD_MS    250U
 #define METER_CAPTURE_TIMEOUT_MS  100U
 
-/* V5固定名义量程3.3V；实际VDDA不同于3.3V时，换算仍会存在比例误差。 */
+/* V5名义启动量程固定3.3V；有效帧的每码电压由真实VREF测量给出。 */
 #define METER_VDDA_V              3.3f
+
+/* 本板真实标定记录保存在capture.c；不使用典型1.2V或目标Vpp反推值。 */
 
 #endif

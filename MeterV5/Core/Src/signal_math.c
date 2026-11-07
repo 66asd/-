@@ -2,8 +2,6 @@
 #include <math.h>
 #include <string.h>
 
-/* 12位ADC有4096个量化区间；幅值差按每区间电压换算。 */
-#define ADC_LEVELS          4096.0f
 #define PI_F                3.14159265358979323846f
 #define MIN_SPAN_CODES      12.0f
 #define CHECK_MIN_HZ        100.0f
@@ -156,7 +154,7 @@ static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, u
 {
     uint32_t i, n = end - start;
     float sum = 0, sq = 0, v, mean, variance, span;
-    float step = cal->vdda_v / ADC_LEVELS;
+    float step = cal->volts_per_code;
 
     for (i = start; i < end; ++i)
     {
@@ -223,7 +221,7 @@ static void fit_channel(const uint32_t *p, uint32_t start, uint32_t end,
     /* 三角波、方波不能套用正弦幅度，继续使用周期平均峰谷差。 */
     if (energy > 0 && fitted >= energy * 0.9975f)
         r->vpp_v[ch] = 2.0f * sqrtf(a * a + b * b) *
-                       cal->vdda_v / ADC_LEVELS;
+                       cal->volts_per_code;
 }
 
 void Signal_Analyze(const uint32_t *p, uint32_t count, float fs,

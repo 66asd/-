@@ -6,7 +6,8 @@
 #include "meter_config.h"
 #include <string.h>
 
-static const MeterCalibration calibration = {METER_VDDA_V};
+/* 3.3V仅初始化名义步长；有效帧必须使用真实参考测得的步长。 */
+static MeterCalibration calibration = {METER_VDDA_V / 4096.0f};
 static MeterResult result;
 static uint8_t busy, requested;
 static uint32_t last_started;
@@ -58,6 +59,8 @@ void App_Poll(void)
 
     if (state == CAPTURE_DONE)
     {
+        /* 原始码用于质量和频率判断，只有电压结果乘本帧物理步长。 */
+        calibration.volts_per_code = Capture_ReferenceVoltage() / 4096.0f;
         Signal_Analyze(Capture_Data(), METER_SAMPLE_COUNT, Capture_SampleRate(), &calibration, &result);
     }
     else

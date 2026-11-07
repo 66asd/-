@@ -47,42 +47,56 @@ static HAL_StatusTypeDef fail_capture(void)
     return HAL_ERROR;
 }
 
-/* 只在TIM和DMA停止时读内部参考，不打断S1/S2同步采样。 */
+/* 采样间隙暂用普通软件转换读取参考，避开F103注入触发引起PA0毛刺的勘误。 */
 static HAL_StatusTypeDef measure_reference(uint32_t *sum)
 {
+    ADC_ChannelConfTypeDef ref = {0};
     uint32_t i;
-    HAL_StatusTypeDef status = HAL_OK;
+    uint32_t saved_cr1 = hadc1.Instance->CR1;
+    uint32_t saved_cr2 = hadc1.Instance->CR2 &
+                         ~(ADC_CR2_ADON | ADC_CR2_SWSTART | ADC_CR2_JSWSTART);
+    uint32_t saved_sampling = hadc1.Instance->SMPR1;
+    uint32_t saved_sequence = hadc1.Instance->SQR3;
+    HAL_StatusTypeDef status;
+
+    /* 调用前两ADC、TIM和DMA均已停止；临时切换不会覆盖S1/S2样本。 */
+    CLEAR_BIT(hadc1.Instance->CR1, ADC_CR1_DUALMOD | ADC_CR1_JAUTO);
+    MODIFY_REG(hadc1.Instance->CR2,
+               ADC_CR2_EXTSEL | ADC_CR2_EXTTRIG | ADC_CR2_DMA | ADC_CR2_CONT |
+               ADC_CR2_JEXTTRIG | ADC_CR2_JSWSTART | ADC_CR2_SWSTART,
+               ADC_SOFTWARE_START);
+    ref.Channel = ADC_CHANNEL_VREFINT;
+    ref.Rank = ADC_REGULAR_RANK_1;
+    ref.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
+    status = HAL_ADC_ConfigChannel(&hadc1, &ref);
     *sum = 0;
-    for (i = 0; i < REFERENCE_SAMPLES; ++i)
+    for (i = 0; i < REFERENCE_SAMPLES && status == HAL_OK; ++i)
     {
-        status = HAL_ADCEx_InjectedStart(&hadc1);
+        status = HAL_ADC_Start(&hadc1);
         if (status != HAL_OK) break;
-        status = HAL_ADCEx_InjectedPollForConversion(&hadc1, 5);
+        status = HAL_ADC_PollForConversion(&hadc1, 5);
         if (status != HAL_OK) break;
-        *sum += HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
+        *sum += HAL_ADC_GetValue(&hadc1) & 0xFFFU;
     }
-    if (HAL_ADCEx_InjectedStop(&hadc1) != HAL_OK)
+    if (HAL_ADC_Stop(&hadc1) != HAL_OK)
         status = HAL_ERROR;
+    /* 成功或失败都恢复原通道和TIM触发，不能让下一帧误采内部参考。 */
+    hadc1.Instance->SMPR1 = saved_sampling;
+    hadc1.Instance->SQR3 = saved_sequence;
+    hadc1.Instance->CR1 = saved_cr1;
+    hadc1.Instance->CR2 = saved_cr2;
     if (*sum == 0U) status = HAL_ERROR;
     return status;
 }
 
 HAL_StatusTypeDef Capture_Init(void)
 {
-    ADC_InjectionConfTypeDef ref = {0};
     /* 上电各校准一次，减少ADC自身偏移；这不代替外部电压校准。 */
     if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
         return HAL_ERROR;
     if (HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK)
         return HAL_ERROR;
     stop_capture();
-    ref.InjectedChannel = ADC_CHANNEL_VREFINT;
-    ref.InjectedRank = ADC_INJECTED_RANK_1;
-    ref.InjectedNbrOfConversion = 1;
-    ref.InjectedSamplingTime = ADC_SAMPLETIME_239CYCLES_5;
-    ref.ExternalTrigInjecConv = ADC_INJECTED_SOFTWARE_START;
-    if (HAL_ADCEx_InjectedConfigChannel(&hadc1, &ref) != HAL_OK)
-        return HAL_ERROR;
     SET_BIT(hadc1.Instance->CR2, ADC_CR2_TSVREFE);
     HAL_Delay(1); /* 首次使能后等参考源稳定，后续保持开启。 */
     return HAL_OK;
@@ -99,13 +113,14 @@ HAL_StatusTypeDef Capture_Begin(void)
     dma_done = 0;
     dma_error = 0;
 
+    if (measure_reference(&reference_before_sum) != HAL_OK)
+        return fail_capture();
+
     /* F1双ADC要先准备从机，再开主机DMA，最后才允许定时器发触发。 */
     mode.Mode = ADC_DUALMODE_REGSIMULT;
     if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &mode) != HAL_OK)
         return fail_capture();
     if (HAL_ADC_Start(&hadc2) != HAL_OK)
-        return fail_capture();
-    if (measure_reference(&reference_before_sum) != HAL_OK)
         return fail_capture();
     if (HAL_ADCEx_MultiModeStart_DMA(&hadc1, samples, METER_SAMPLE_COUNT) != HAL_OK)
         return fail_capture();

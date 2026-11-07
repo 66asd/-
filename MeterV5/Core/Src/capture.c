@@ -7,6 +7,22 @@ static uint32_t samples[METER_SAMPLE_COUNT];
 static volatile uint8_t dma_done, dma_error;
 static CaptureState state = CAPTURE_IDLE;
 static uint32_t started_ms;
+static uint32_t reference_before_sum, reference_after_sum;
+static float reference_voltage;
+
+typedef struct
+{
+    float measured_vdda_v;
+    uint32_t reference_sum;
+    uint32_t count;
+} ReferenceCalibration;
+
+/* 本板已有的实测记录：VDDA=3.2V，64次参考码总和97935。
+ * 它不是目标Vpp的修正量；供电变化时保留此记录，读取新的参考码计算实时VDDA。
+ */
+static ReferenceCalibration reference_calibration = {3.2f, 97935U, 64U};
+
+#define REFERENCE_SAMPLES 64U
 
 static void stop_capture(void)
 {
@@ -31,6 +47,48 @@ static HAL_StatusTypeDef fail_capture(void)
     return HAL_ERROR;
 }
 
+/* 采样间隙暂用普通软件转换读取参考，避开F103注入触发引起PA0毛刺的勘误。 */
+static HAL_StatusTypeDef measure_reference(uint32_t *sum)
+{
+    ADC_ChannelConfTypeDef ref = {0};
+    uint32_t i;
+    uint32_t saved_cr1 = hadc1.Instance->CR1;
+    uint32_t saved_cr2 = hadc1.Instance->CR2 &
+                         ~(ADC_CR2_ADON | ADC_CR2_SWSTART | ADC_CR2_JSWSTART);
+    uint32_t saved_sampling = hadc1.Instance->SMPR1;
+    uint32_t saved_sequence = hadc1.Instance->SQR3;
+    HAL_StatusTypeDef status;
+
+    /* 调用前两ADC、TIM和DMA均已停止；临时切换不会覆盖S1/S2样本。 */
+    CLEAR_BIT(hadc1.Instance->CR1, ADC_CR1_DUALMOD | ADC_CR1_JAUTO);
+    MODIFY_REG(hadc1.Instance->CR2,
+               ADC_CR2_EXTSEL | ADC_CR2_EXTTRIG | ADC_CR2_DMA | ADC_CR2_CONT |
+               ADC_CR2_JEXTTRIG | ADC_CR2_JSWSTART | ADC_CR2_SWSTART,
+               ADC_SOFTWARE_START);
+    ref.Channel = ADC_CHANNEL_VREFINT;
+    ref.Rank = ADC_REGULAR_RANK_1;
+    ref.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
+    status = HAL_ADC_ConfigChannel(&hadc1, &ref);
+    *sum = 0;
+    for (i = 0; i < REFERENCE_SAMPLES && status == HAL_OK; ++i)
+    {
+        status = HAL_ADC_Start(&hadc1);
+        if (status != HAL_OK) break;
+        status = HAL_ADC_PollForConversion(&hadc1, 5);
+        if (status != HAL_OK) break;
+        *sum += HAL_ADC_GetValue(&hadc1) & 0xFFFU;
+    }
+    if (HAL_ADC_Stop(&hadc1) != HAL_OK)
+        status = HAL_ERROR;
+    /* 成功或失败都恢复原通道和TIM触发，不能让下一帧误采内部参考。 */
+    hadc1.Instance->SMPR1 = saved_sampling;
+    hadc1.Instance->SQR3 = saved_sequence;
+    hadc1.Instance->CR1 = saved_cr1;
+    hadc1.Instance->CR2 = saved_cr2;
+    if (*sum == 0U) status = HAL_ERROR;
+    return status;
+}
+
 HAL_StatusTypeDef Capture_Init(void)
 {
     /* 上电各校准一次，减少ADC自身偏移；这不代替外部电压校准。 */
@@ -39,6 +97,8 @@ HAL_StatusTypeDef Capture_Init(void)
     if (HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK)
         return HAL_ERROR;
     stop_capture();
+    SET_BIT(hadc1.Instance->CR2, ADC_CR2_TSVREFE);
+    HAL_Delay(1); /* 首次使能后等参考源稳定，后续保持开启。 */
     return HAL_OK;
 }
 
@@ -52,6 +112,9 @@ HAL_StatusTypeDef Capture_Begin(void)
     /* 清掉上一帧的通知，防止刚开始新帧就被误认成已完成。 */
     dma_done = 0;
     dma_error = 0;
+
+    if (measure_reference(&reference_before_sum) != HAL_OK)
+        return fail_capture();
 
     /* F1双ADC要先准备从机，再开主机DMA，最后才允许定时器发触发。 */
     mode.Mode = ADC_DUALMODE_REGSIMULT;
@@ -74,6 +137,7 @@ HAL_StatusTypeDef Capture_Begin(void)
 CaptureState Capture_Poll(void)
 {
     uint32_t remaining;
+    float calibration_code, current_code;
     if (state != CAPTURE_PENDING)
         return state;
 
@@ -88,9 +152,22 @@ CaptureState Capture_Poll(void)
 
     remaining = __HAL_DMA_GET_COUNTER(hadc1.DMA_Handle);
     stop_capture();
+    if (remaining != 0U || measure_reference(&reference_after_sum) != HAL_OK)
+    {
+        fail_capture();
+        return state;
+    }
+    /* 用帧前、帧后的参考平均值，减少供电在采样期间变化带来的偏差。 */
+    calibration_code = (float)reference_calibration.reference_sum / reference_calibration.count;
+    current_code = (float)(reference_before_sum + reference_after_sum) / (REFERENCE_SAMPLES * 2U);
+    /* VDDA = 标定时实测VDDA × 标定参考码均值 ÷ 本帧参考码均值。 */
+    reference_voltage = reference_calibration.measured_vdda_v * calibration_code / current_code;
+    if (reference_voltage < 2.0f || reference_voltage > 3.6f)
+    {
+        fail_capture();
+        return state;
+    }
     state = CAPTURE_DONE;
-    if (remaining != 0U)
-        state = CAPTURE_FAILED; /* 没收满2048对样本，不能交给算法计算。 */
     return state;
 }
 
@@ -98,6 +175,11 @@ const uint32_t *Capture_Data(void)
 {
     /* 返回原数组，避免复制8KB。下一帧开始前，这些数据保持不变。 */
     return samples;
+}
+
+float Capture_ReferenceVoltage(void)
+{
+    return reference_voltage;
 }
 
 float Capture_SampleRate(void)
