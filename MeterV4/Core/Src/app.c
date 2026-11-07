@@ -6,7 +6,7 @@
 #include "meter_config.h"
 #include <string.h>
 
-static const MeterCalibration calibration = {METER_VDDA_V};
+static MeterCalibration calibration = {METER_VDDA_V};
 static MeterResult result;
 static uint8_t busy, requested;
 static uint32_t last_started;
@@ -58,6 +58,7 @@ void App_Poll(void)
 
     if (state == CAPTURE_DONE)
     {
+        calibration.vdda_v = Capture_ReferenceVoltage(); /* 每帧使用实测量程，不再手改VDDA。 */
         Signal_Analyze(Capture_Data(), METER_SAMPLE_COUNT, Capture_SampleRate(), &calibration, &result);
     }
     else

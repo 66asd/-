@@ -1,4 +1,4 @@
-#ifndef METER_CONFIG_H
+﻿#ifndef METER_CONFIG_H
 #define METER_CONFIG_H
 
 /* 改输出只看这两项；频率单位Hz，波形可选SINE、TRIANGLE、SQUARE。 */
@@ -10,7 +10,10 @@
 #define METER_UPDATE_PERIOD_MS    250U
 #define METER_CAPTURE_TIMEOUT_MS  100U
 
-/* 取板上VDDA实测值；供电变化后需重测，否则RMS和Vpp都会按错误量程换算。 */
+/* 启动默认值；有效帧会使用内部参考得到的实时VDDA，不用逐次手改这里。 */
 #define METER_VDDA_V              3.2f
+
+/* 由实测VDDA=3.2V和64次内部参考码1530.234375算得；不是典型1.2V，也不取自目标Vpp。 */
+#define METER_VREFINT_CAL_V       1.195495605469f
 
 #endif

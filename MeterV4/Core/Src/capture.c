@@ -7,6 +7,10 @@ static uint32_t samples[METER_SAMPLE_COUNT];
 static volatile uint8_t dma_done, dma_error;
 static CaptureState state = CAPTURE_IDLE;
 static uint32_t started_ms;
+static uint32_t reference_before_sum, reference_after_sum;
+static float reference_voltage;
+
+#define REFERENCE_SAMPLES 64U
 
 static void stop_capture(void)
 {
@@ -31,14 +35,44 @@ static HAL_StatusTypeDef fail_capture(void)
     return HAL_ERROR;
 }
 
+/* 只在TIM和DMA停止时读内部参考，不打断S1/S2同步采样。 */
+static HAL_StatusTypeDef measure_reference(uint32_t *sum)
+{
+    uint32_t i;
+    HAL_StatusTypeDef status = HAL_OK;
+    *sum = 0;
+    for (i = 0; i < REFERENCE_SAMPLES; ++i)
+    {
+        status = HAL_ADCEx_InjectedStart(&hadc1);
+        if (status != HAL_OK) break;
+        status = HAL_ADCEx_InjectedPollForConversion(&hadc1, 5);
+        if (status != HAL_OK) break;
+        *sum += HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
+    }
+    if (HAL_ADCEx_InjectedStop(&hadc1) != HAL_OK)
+        status = HAL_ERROR;
+    if (*sum == 0U) status = HAL_ERROR;
+    return status;
+}
+
 HAL_StatusTypeDef Capture_Init(void)
 {
+    ADC_InjectionConfTypeDef ref = {0};
     /* 上电各校准一次，减少ADC自身偏移；这不代替外部电压校准。 */
     if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
         return HAL_ERROR;
     if (HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK)
         return HAL_ERROR;
     stop_capture();
+    ref.InjectedChannel = ADC_CHANNEL_VREFINT;
+    ref.InjectedRank = ADC_INJECTED_RANK_1;
+    ref.InjectedNbrOfConversion = 1;
+    ref.InjectedSamplingTime = ADC_SAMPLETIME_239CYCLES_5;
+    ref.ExternalTrigInjecConv = ADC_INJECTED_SOFTWARE_START;
+    if (HAL_ADCEx_InjectedConfigChannel(&hadc1, &ref) != HAL_OK)
+        return HAL_ERROR;
+    SET_BIT(hadc1.Instance->CR2, ADC_CR2_TSVREFE);
+    HAL_Delay(1); /* 首次使能后等参考源稳定，后续保持开启。 */
     return HAL_OK;
 }
 
@@ -58,6 +92,8 @@ HAL_StatusTypeDef Capture_Begin(void)
     if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &mode) != HAL_OK)
         return fail_capture();
     if (HAL_ADC_Start(&hadc2) != HAL_OK)
+        return fail_capture();
+    if (measure_reference(&reference_before_sum) != HAL_OK)
         return fail_capture();
     if (HAL_ADCEx_MultiModeStart_DMA(&hadc1, samples, METER_SAMPLE_COUNT) != HAL_OK)
         return fail_capture();
@@ -88,9 +124,20 @@ CaptureState Capture_Poll(void)
 
     remaining = __HAL_DMA_GET_COUNTER(hadc1.DMA_Handle);
     stop_capture();
+    if (remaining != 0U || measure_reference(&reference_after_sum) != HAL_OK)
+    {
+        fail_capture();
+        return state;
+    }
+    /* 用帧前、帧后的参考平均值，减少供电在采样期间变化带来的偏差。 */
+    reference_voltage = METER_VREFINT_CAL_V * (4096.0f * REFERENCE_SAMPLES * 2U) /
+                        (reference_before_sum + reference_after_sum);
+    if (reference_voltage < 2.0f || reference_voltage > 3.6f)
+    {
+        fail_capture();
+        return state;
+    }
     state = CAPTURE_DONE;
-    if (remaining != 0U)
-        state = CAPTURE_FAILED; /* 没收满2048对样本，不能交给算法计算。 */
     return state;
 }
 
@@ -98,6 +145,11 @@ const uint32_t *Capture_Data(void)
 {
     /* 返回原数组，避免复制8KB。下一帧开始前，这些数据保持不变。 */
     return samples;
+}
+
+float Capture_ReferenceVoltage(void)
+{
+    return reference_voltage;
 }
 
 float Capture_SampleRate(void)
