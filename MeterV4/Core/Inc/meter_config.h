@@ -13,7 +13,6 @@
 /* 启动默认值；有效帧会使用内部参考得到的实时VDDA，不用逐次手改这里。 */
 #define METER_VDDA_V              3.2f
 
-/* 由实测VDDA=3.2V和64次内部参考码1530.234375算得；不是典型1.2V，也不取自目标Vpp。 */
-#define METER_VREFINT_CAL_V       1.195495605469f
+/* 本板真实标定记录在capture.c中；实时VDDA按标定码/当前码的比值计算。 */
 
 #endif

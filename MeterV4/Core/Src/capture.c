@@ -10,6 +10,18 @@ static uint32_t started_ms;
 static uint32_t reference_before_sum, reference_after_sum;
 static float reference_voltage;
 
+typedef struct
+{
+    float measured_vdda_v;
+    uint32_t reference_sum;
+    uint32_t count;
+} ReferenceCalibration;
+
+/* 本板已有的实测记录：VDDA=3.2V，64次参考码总和97935。
+ * 它不是目标Vpp的修正量；供电变化时保留此记录，读取新的参考码计算实时VDDA。
+ */
+static ReferenceCalibration reference_calibration = {3.2f, 97935U, 64U};
+
 #define REFERENCE_SAMPLES 64U
 
 static void stop_capture(void)
@@ -110,6 +122,7 @@ HAL_StatusTypeDef Capture_Begin(void)
 CaptureState Capture_Poll(void)
 {
     uint32_t remaining;
+    float calibration_code, current_code;
     if (state != CAPTURE_PENDING)
         return state;
 
@@ -130,8 +143,10 @@ CaptureState Capture_Poll(void)
         return state;
     }
     /* 用帧前、帧后的参考平均值，减少供电在采样期间变化带来的偏差。 */
-    reference_voltage = METER_VREFINT_CAL_V * (4096.0f * REFERENCE_SAMPLES * 2U) /
-                        (reference_before_sum + reference_after_sum);
+    calibration_code = (float)reference_calibration.reference_sum / reference_calibration.count;
+    current_code = (float)(reference_before_sum + reference_after_sum) / (REFERENCE_SAMPLES * 2U);
+    /* VDDA = 标定时实测VDDA × 标定参考码均值 ÷ 本帧参考码均值。 */
+    reference_voltage = reference_calibration.measured_vdda_v * calibration_code / current_code;
     if (reference_voltage < 2.0f || reference_voltage > 3.6f)
     {
         fail_capture();
