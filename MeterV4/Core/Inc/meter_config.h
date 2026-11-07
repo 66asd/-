@@ -11,6 +11,6 @@
 #define METER_CAPTURE_TIMEOUT_MS  100U
 
 /* ADC供电参考电压，仅用于将原始码值换算为V/mV。 */
-#define METER_VDDA_V              3.300f
+#define METER_VDDA_V              3.254f
 
 #endif
