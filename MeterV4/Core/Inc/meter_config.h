@@ -11,6 +11,6 @@
 #define METER_CAPTURE_TIMEOUT_MS  100U
 
 /* 取板上VDDA实测值；供电变化后需重测，否则RMS和Vpp都会按错误量程换算。 */
-#define METER_VDDA_V              3.277f
+#define METER_VDDA_V              3.2f
 
 #endif
