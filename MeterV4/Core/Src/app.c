@@ -6,7 +6,7 @@
 #include "meter_config.h"
 #include <string.h>
 
-static MeterCalibration calibration;
+static const MeterCalibration calibration = {METER_VDDA_V};
 static MeterResult result;
 static uint8_t busy, requested;
 static uint32_t last_started;
@@ -15,7 +15,7 @@ static void start_measurement(void)
 {
     last_started = HAL_GetTick();
     requested = 0;
-    busy = 1; /* 内部参考的读取也属于本轮测量，先标忙再清空结果。 */
+    busy = 1; /* 先标忙，再清空本轮结果。 */
     /* 新帧失败或提前结束时，不能把上一帧未更新的字段当作本轮结果。 */
     memset(&result, 0, sizeof(result));
     if (Capture_Begin() != HAL_OK)
@@ -58,8 +58,6 @@ void App_Poll(void)
 
     if (state == CAPTURE_DONE)
     {
-        /* 使用本帧前后配套的参考读数，避免复用上一帧电压。 */
-        calibration.vdda_v = Capture_ReferenceVoltage();
         Signal_Analyze(Capture_Data(), METER_SAMPLE_COUNT, Capture_SampleRate(), &calibration, &result);
     }
     else
