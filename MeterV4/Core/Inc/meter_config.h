@@ -10,7 +10,7 @@
 #define METER_UPDATE_PERIOD_MS    250U
 #define METER_CAPTURE_TIMEOUT_MS  100U
 
-/* ADC供电参考电压，仅用于将原始码值换算为V/mV。 */
-#define METER_VDDA_V              3.254f
+/* 取板上VDDA实测值；供电变化后需重测，否则RMS和Vpp都会按错误量程换算。 */
+#define METER_VDDA_V              3.283f
 
 #endif
