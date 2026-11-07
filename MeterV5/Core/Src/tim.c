@@ -19,6 +19,8 @@
 
 #include "tim.h"
 
+/* htim3是TIM3句柄，包含寄存器地址和配置；sClockSourceConfig选时钟，sMasterConfig选内部TRGO输出。
+ * TIM3只产生采样节拍，不逐点输出DDS波形，也不需要定时器中断。 */
 TIM_HandleTypeDef htim3;
 
 /* TIM3 init function */

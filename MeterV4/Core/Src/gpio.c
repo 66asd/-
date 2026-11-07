@@ -29,10 +29,11 @@
         * EVENT_OUT
         * EXTI
 */
+/* GPIO_InitStruct是一次配置GPIO用的临时结构；此处把PA4配置为FSYNC输出，并先置高保持未选中。 */
 void MX_GPIO_Init(void)
 {
 
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitTypeDef GPIO_InitStruct = {0}; /* 临时指定引脚、工作模式及输出速度/上下拉。 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOD_CLK_ENABLE();

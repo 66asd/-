@@ -8,6 +8,7 @@ void SysTick_Handler(void)
     HAL_IncTick(); /* HAL延时、采集超时和自动刷新都使用这个毫秒计数。 */
 }
 
+/* DMA中断先交HAL识别完成或错误，HAL再调用capture.c中的回调；这里不进行浮点计算。 */
 void DMA1_Channel1_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(hadc1.DMA_Handle);

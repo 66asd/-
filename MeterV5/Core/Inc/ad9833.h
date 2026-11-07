@@ -4,7 +4,7 @@
 #include "main.h"
 
 /* 必须与模块实际参考时钟一致 */
-#define AD9833_MCLK_HZ 25000000UL
+#define AD9833_MCLK_HZ 25000000UL /* 模块MCLK假定25MHz；实际偏离时DDS输出也按比例偏离。 */
 
 typedef enum
 {

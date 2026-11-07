@@ -26,6 +26,7 @@
 /**
   * Enable DMA controller clock
   */
+/* 这里只开DMA时钟和中断；ADC对应的DMA通道、32位数据宽度和Normal模式在adc.c里配置。 */
 void MX_DMA_Init(void)
 {
 

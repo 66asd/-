@@ -19,6 +19,8 @@
 
 #include "spi.h"
 
+/* hspi1为SPI1句柄；PA5输出SCLK，PA7输出SDATA；片选FSYNC由PA4普通GPIO控制。
+ * SPI时钟=72MHz/128=562.5kHz，仅用于写DDS寄存器，不是DDS输出频率。 */
 SPI_HandleTypeDef hspi1;
 
 /* SPI1 init function */
@@ -48,7 +50,7 @@ void MX_SPI1_Init(void)
 void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 {
 
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitTypeDef GPIO_InitStruct = {0}; /* 临时指定引脚、工作模式及输出速度/上下拉。 */
   if(spiHandle->Instance==SPI1)
   {
 

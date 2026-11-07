@@ -16,10 +16,11 @@
  * 一个16位命令拆成两个字节，高字节先发。
  * 两个字节发送期间 FSYNC 始终保持低电平。
  */
+/* 底层只负责一次16位传输；word包含寄存器选择位和数据，FSYNC低期间发完两个字节。 */
 static HAL_StatusTypeDef AD9833_Write16(uint16_t word)
 {
-    uint8_t tx[2];
-    HAL_StatusTypeDef status;
+    uint8_t tx[2]; /* 同一16位命令拆成高字节、低字节，依次由SPI送出。 */
+    HAL_StatusTypeDef status; /* 保存本次SPI发送是否成功，失败即返回给调用者。 */
 
     tx[0] = (uint8_t)(word >> 8);
     tx[1] = (uint8_t)(word & 0xFFU);
@@ -33,11 +34,13 @@ static HAL_StatusTypeDef AD9833_Write16(uint16_t word)
     return status;
 }
 
+/* 配置输出：frequency_hz是整数Hz，wave是枚举波形；复位写频率/相位后开始输出。
+ * DDS独立按自身MCLK持续运行；ADC采样、串口刷新不会逐点生成DDS波形。 */
 HAL_StatusTypeDef AD9833_SetOutput(uint32_t frequency_hz, AD9833_WaveType wave)
 {
-    uint32_t tuning_word;
-    uint16_t control;
-    HAL_StatusTypeDef status;
+    uint32_t tuning_word; /* 28位相位步进字；决定输出频率，不决定模拟输出幅度。 */
+    uint16_t control; /* 控制寄存器内容：选择正弦、三角或方波，并解除复位。 */
+    HAL_StatusTypeDef status; /* 保存本次SPI发送是否成功，失败即返回给调用者。 */
 
     /*
      * 限制为参考时钟的一半以下。
@@ -74,6 +77,7 @@ HAL_StatusTypeDef AD9833_SetOutput(uint32_t frequency_hz, AD9833_WaveType wave)
      * 使用64位整数计算并四舍五入，防止32位乘法溢出。
      * STM32F103没有硬件浮点单元，这里无需使用浮点。
      */
+    /* 公式：步进字=round(目标Hz*2^28/MCLK)。<<28是乘2^28，加半个除数实现四舍五入。 */
     tuning_word =
         (uint32_t)((((uint64_t)frequency_hz << 28) + (AD9833_MCLK_HZ / 2UL)) / AD9833_MCLK_HZ);
 

@@ -19,6 +19,7 @@
 
 #include "usart.h"
 
+/* huart1为USART1句柄；PA9发文字到屏幕RX，PA10收屏幕TX；115200、8数据位、无校验、1停止位。 */
 UART_HandleTypeDef huart1;
 
 /* USART1 init function */
@@ -44,7 +45,7 @@ void MX_USART1_UART_Init(void)
 void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 {
 
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitTypeDef GPIO_InitStruct = {0}; /* 临时指定引脚、工作模式及输出速度/上下拉。 */
   if(uartHandle->Instance==USART1)
   {
 

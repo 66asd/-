@@ -19,6 +19,9 @@
 
 #include "adc.h"
 
+/* hadc1/hadc2是HAL管理两路ADC的句柄；hdma_adc1管理唯一的主采样DMA。
+ * PA0由ADC1采S1，PA1由ADC2采S2；sConfig描述单通道，multimode描述双ADC同步关系。
+ * 12MHz ADC时钟，外部信号采样7.5周期+转换12.5周期，约1.667us，小于5us触发间隔。 */
 ADC_HandleTypeDef hadc1;
 ADC_HandleTypeDef hadc2;
 DMA_HandleTypeDef hdma_adc1;
@@ -98,7 +101,7 @@ void MX_ADC2_Init(void)
 void HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)
 {
 
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitTypeDef GPIO_InitStruct = {0}; /* 临时指定引脚、工作模式及输出速度/上下拉。 */
   if(adcHandle->Instance==ADC1)
   {
 

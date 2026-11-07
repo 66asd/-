@@ -5,10 +5,10 @@
 
 typedef enum
 {
-    CAPTURE_IDLE,
-    CAPTURE_PENDING,
-    CAPTURE_DONE,
-    CAPTURE_FAILED
+    CAPTURE_IDLE, /* 还没开始采样。 */
+    CAPTURE_PENDING, /* 定时器和DMA正在完成这一帧。 */
+    CAPTURE_DONE, /* 主样本和前后参考均成功，可计算本帧结果。 */
+    CAPTURE_FAILED /* 本帧失败，硬件已停止，可由下一帧重新尝试。 */
 } CaptureState;
 
 HAL_StatusTypeDef Capture_Init(void);

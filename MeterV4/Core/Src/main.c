@@ -31,6 +31,7 @@ void SystemClock_Config(void);
   * @brief  The application entry point.
   * @retval int
   */
+/* 阅读顺序：时钟 -> 外设 -> App_Init -> 循环App_Poll；测量调度和显示流程在app.c。 */
 int main(void)
 {
 
@@ -67,11 +68,12 @@ int main(void)
   * @brief System Clock Configuration
   * @retval None
   */
+/* 时钟树：外部8MHz -> PLL×9 -> SYSCLK/HCLK=72MHz；APB1=36MHz但TIM3=72MHz；APB2=72MHz。 */
 void SystemClock_Config(void)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0}; /* 配置HSE晶振和PLL倍频。 */
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0}; /* 配置CPU/AHB/APB时钟分配。 */
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0}; /* 选择ADC独立分频，72MHz/6=12MHz。 */
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
