@@ -1,8 +1,8 @@
-﻿#ifndef METER_CONFIG_H
+#ifndef METER_CONFIG_H
 #define METER_CONFIG_H
 
 /* 改输出只看这两项；频率单位Hz，波形可选SINE、TRIANGLE、SQUARE。 */
-#define METER_DDS_HZ              10000U /* DDS期望频率；当前保留用户改成的10kHz。 */
+#define METER_DDS_HZ              20000U /* DDS期望频率；当前保留用户改成的10kHz。 */
 #define METER_DDS_WAVE            AD9833_WAVE_SINE
 
 /* 一帧采4096对样本；250ms启动一帧，不是每250ms采一个点。 */

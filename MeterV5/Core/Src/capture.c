@@ -1,4 +1,4 @@
-﻿#include "capture.h"
+#include "capture.h"
 #include "adc.h"
 #include "tim.h"
 
@@ -22,7 +22,7 @@ typedef struct
 /* 本板已有的实测记录：VDDA=3.2V，64次参考码总和97935。
  * 它不是目标Vpp的修正量；供电变化时保留此记录，读取新的参考码计算实时VDDA。
  */
-static ReferenceCalibration reference_calibration = {3.2f, 97935U, 64U};
+static ReferenceCalibration reference_calibration = {3.229f, 97935U, 64U};
 
 #define REFERENCE_SAMPLES 64U /* 每次读参考的次数；一帧前后合计128次。 */
 
