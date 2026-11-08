@@ -13,6 +13,6 @@
 /* 启动默认值；有效帧会使用内部参考得到的实时VDDA，不用逐次手改这里。 */
 #define METER_VDDA_V              3.2f
 
-/* 本板真实标定记录在capture.c中；实时VDDA按标定码/当前码的比值计算。 */
+/* capture.c按VREFINT典型1.200V估计本帧VDDA；不使用额外通道倍率。 */
 
 #endif

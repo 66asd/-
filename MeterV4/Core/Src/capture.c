@@ -10,19 +10,13 @@ static CaptureState state = CAPTURE_IDLE; /* 当前帧处于未开始、等待�
 static uint32_t started_ms; /* TIM开始采样时的毫秒计数，超过100ms未完成就退出本帧。 */
 /* 帧前、帧后各64次VREFINT原始码的总和；它们不是S1/S2数据。 */
 static uint32_t reference_before_sum, reference_after_sum;
-static float reference_voltage; /* 本帧由参考码推算出的实际VDDA，单位V；不是典型1.2V。 */
+static float reference_voltage; /* 本帧由参考码推算出的估计VDDA，单位V；不是典型1.2V。 */
 
-typedef struct
-{
-    float measured_vdda_v; /* 初次标定时，万用表实际测到的VDDA，单位V。 */
-    uint32_t reference_sum; /* 在上述VDDA条件下，内部参考原始码的累加总和。 */
-    uint32_t count; /* 上述总和累加了多少次；总和/count才是标定平均码。 */
-} ReferenceCalibration;
-
-/* 本板已有的实测记录：VDDA=3.2V，64次参考码总和97935。
- * 它不是目标Vpp的修正量；供电变化时保留此记录，读取新的参考码计算实时VDDA。
+/* 恢复旧版VREFINT换算口径：采用内部参考典型值1.200V。
+ * 典型值不等于本颗芯片的精密实测值；这是参考估计，不能保证绝对Vpp准确。
+ * 不加入通道gain，也不按613mV反推任何参数。
  */
-static ReferenceCalibration reference_calibration = {3.2f, 97935U, 64U};
+#define VREFINT_TYPICAL_V 1.200f
 
 #define REFERENCE_SAMPLES 64U /* 每次读参考的次数；一帧前后合计128次。 */
 
@@ -146,8 +140,7 @@ HAL_StatusTypeDef Capture_Begin(void)
 CaptureState Capture_Poll(void)
 {
     uint32_t remaining; /* DMA还没搬完的32位字数；完成时必须为0。 */
-    /* calibration_code是旧标定参考平均码；current_code是本帧128次参考平均码。 */
-    float calibration_code, current_code;
+    float current_code; /* 本帧前后128次内部参考码的均值。 */
     if (state != CAPTURE_PENDING)
         return state;
 
@@ -168,10 +161,9 @@ CaptureState Capture_Poll(void)
         return state;
     }
     /* 用帧前、帧后的参考平均值，减少供电在采样期间变化带来的偏差。 */
-    calibration_code = (float)reference_calibration.reference_sum / reference_calibration.count;
     current_code = (float)(reference_before_sum + reference_after_sum) / (REFERENCE_SAMPLES * 2U);
-    /* VDDA = 标定时实测VDDA × 标定参考码均值 ÷ 本帧参考码均值。 */
-    reference_voltage = reference_calibration.measured_vdda_v * calibration_code / current_code;
+    /* 普通12位ADC关系：参考平均码/4096 = VREFINT/VDDA，移项得到下式。 */
+    reference_voltage = VREFINT_TYPICAL_V * 4096.0f / current_code;
     if (reference_voltage < 2.0f || reference_voltage > 3.6f)
     {
         fail_capture();
@@ -187,7 +179,7 @@ const uint32_t *Capture_Data(void)
     return samples;
 }
 
-/* 返回本帧实际VDDA（V）。只能在Capture_Poll返回DONE后用于本帧电压换算。 */
+/* 返回本帧估计VDDA（V）。只能在Capture_Poll返回DONE后用于本帧电压换算。 */
 float Capture_ReferenceVoltage(void)
 {
     return reference_voltage;
