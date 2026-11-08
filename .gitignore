@@ -1,0 +1,8 @@
+Drivers/
+MDK-ARM/Sweep/
+MDK-ARM/DebugConfig/
+MDK-ARM/RTE/
+*.lst
+*.uvguix.*
+.mxproject
+__pycache__/
