@@ -1,8 +1,8 @@
-﻿#ifndef METER_CONFIG_H
+#ifndef METER_CONFIG_H
 #define METER_CONFIG_H
 
 /* 改输出只看这两项；频率单位Hz，波形可选SINE、TRIANGLE、SQUARE。 */
-#define METER_DDS_HZ              10000U /* DDS期望频率；当前保留用户改成的10kHz。 */
+#define METER_DDS_HZ              20000U /* DDS期望频率；当前保留用户改成的10kHz。 */
 #define METER_DDS_WAVE            AD9833_WAVE_SINE
 
 /* 一帧采2048对样本；250ms启动一帧，不是每250ms采一个点。 */
@@ -11,7 +11,7 @@
 #define METER_CAPTURE_TIMEOUT_MS  100U /* 只给主采样等待用的超时；不是RMS或Vpp滤波窗口。 */
 
 /* 启动默认值；有效帧会使用内部参考得到的实时VDDA，不用逐次手改这里。 */
-#define METER_VDDA_V              3.2f
+#define METER_VDDA_V              3.3f
 
 /* capture.c按VREFINT典型1.200V估计本帧VDDA；不使用额外通道倍率。 */
 
