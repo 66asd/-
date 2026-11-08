@@ -2,7 +2,7 @@
 #define METER_CONFIG_H
 #define METER_SAMPLE_COUNT 2048U
 #define METER_CAPTURE_TIMEOUT_MS 100U
-#define METER_DDS_HZ 5000U
+#define METER_DDS_HZ 10000U
 #define METER_UPDATE_PERIOD_MS 250U /* automatic start-to-start interval; about 4 updates/s */
 #if METER_UPDATE_PERIOD_MS == 0
 #error "METER_UPDATE_PERIOD_MS must be nonzero"
