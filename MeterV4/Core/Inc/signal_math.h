@@ -10,7 +10,7 @@
 
 typedef struct
 {
-    float vdda_v; /* 当前帧实际ADC参考电压，单位V，App在采集成功后更新。 */
+    float vdda_v; /* 当前帧由VREFINT典型值估计的VDDA，单位V，采集成功后更新。 */
 } MeterCalibration;
 
 /* 数组下标0是S1，1是S2。电压统一存V，发屏幕时才换成mV。 */
@@ -24,7 +24,7 @@ typedef struct
     float vpp_v[2]; /* 最终去噪/拟合后的峰峰值，单位V；发屏幕才转mV。 */
 } MeterResult;
 
-/* 内部接口：App传入完整样本、正采样率和固定校准参数，不接收外部任意参数。
+/* 内部接口：App传入完整样本、正采样率和本帧估计量程，不接收外部任意参数。
  * 只在采集成功后调用。samples低16位是S1，高16位是S2。
  * 相位=S2-S1，负数表示S2滞后；三角波测量的是基波相位。
  */

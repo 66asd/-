@@ -2,9 +2,9 @@
 #include "adc.h"
 #include "tim.h"
 
-/* DMA把同一时刻的S1/S2放在一个32位字里，共占8192字节。 */
+/* DMA把同一时刻的S1/S2放在一个32位字里，共占16384字节。 */
 static uint32_t samples[METER_SAMPLE_COUNT];
-/* 中断写、前台读：done表示2048对样本搬完；error表示本轮DMA/ADC发生错误。 */
+/* 中断写、前台读：done表示4096对样本搬完；error表示本轮DMA/ADC发生错误。 */
 static volatile uint8_t dma_done, dma_error;
 static CaptureState state = CAPTURE_IDLE; /* 当前帧处于未开始、等待、完成或失败中的哪一步。 */
 static uint32_t started_ms; /* TIM开始采样时的毫秒计数，超过100ms未完成就退出本帧。 */
@@ -103,7 +103,7 @@ HAL_StatusTypeDef Capture_Init(void)
     return HAL_OK;
 }
 
-/* 启动一帧：前参考 -> 准备ADC2 -> ADC1+DMA -> TIM3；不在这里等待2048对样本。 */
+/* 启动一帧：前参考 -> 准备ADC2 -> ADC1+DMA -> TIM3；不在这里等待4096对样本。 */
 HAL_StatusTypeDef Capture_Begin(void)
 {
     ADC_MultiModeTypeDef mode = {0}; /* 本轮重新确认ADC1为主机、ADC2为同步从机。 */
@@ -175,7 +175,7 @@ CaptureState Capture_Poll(void)
 
 const uint32_t *Capture_Data(void)
 {
-    /* 返回原数组，避免复制8KB。下一帧开始前，这些数据保持不变。 */
+    /* 返回原数组，避免复制16KB。下一帧开始前，这些数据保持不变。 */
     return samples;
 }
 

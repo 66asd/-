@@ -63,7 +63,7 @@ void App_Poll(void)
 
     if (state == CAPTURE_DONE)
     {
-        calibration.vdda_v = Capture_ReferenceVoltage(); /* 每帧使用实测量程，不再手改VDDA。 */
+        calibration.vdda_v = Capture_ReferenceVoltage(); /* 每帧使用VREFINT典型值推算的量程，不依赖人工VDDA记录。 */
         Signal_Analyze(Capture_Data(), METER_SAMPLE_COUNT, Capture_SampleRate(), &calibration, &result);
     }
     else

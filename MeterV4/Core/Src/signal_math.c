@@ -9,9 +9,9 @@
  * x保存通道中间统计量，cal提供物理换算单位，r是本帧结果输出。 */
 #define PI_F                3.14159265358979323846f
 #define MIN_SPAN_CODES      12.0f /* 原始峰谷不足12码时认为信号过小。 */
-#define CHECK_MIN_HZ        100.0f /* 频率有效性检查下限；不是输出频率设定。 */
-#define CHECK_MAX_HZ        50000.0f /* 频率数值检查上限；不代表整个算法在50kHz仍有保证。 */
-#define CROSS_LIMIT_HZ      20000.0f /* 相邻有效穿越至少间隔fs/20000点；实际穿越判定另有限制。 */
+#define CHECK_MIN_HZ        99.5f /* 100Hz边界留0.5%读数抖动余量，不钳位测量结果。 */
+#define CHECK_MAX_HZ        30150.0f /* 30kHz边界留0.5%读数抖动余量，不承诺高频幅值精度。 */
+#define CROSS_LIMIT_HZ      60000.0f /* 去重间隔短于30kHz周期，避免原20kHz限制漏计。 */
 #define FREQ_TOLERANCE      0.03f /* 两路测得频率差不超过S1的3%，才按同频处理相位。 */
 
 /* 计算过程用的中间量，单位是ADC码值；最终结果才换算成V。 */
@@ -80,8 +80,8 @@ static float frequency(const uint32_t *p, uint32_t count, unsigned ch,
         }
         a = b;
     }
-    if (crossings < 3U)
-        return 0; /* 穿越太少，不把一个偶然跳变当成稳定周期。 */
+    if (crossings < 2U)
+        return 0; /* 至少两个有效穿越才有一个完整周期；4096点覆盖100Hz约两个周期。 */
     /* N次穿越之间只有N-1个周期；用首末距离平均周期，减少单个穿越误差。 */
     return fs * (crossings - 1U) / (x->last - x->first);
 }
@@ -131,6 +131,7 @@ static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch,
     cycles = (uint32_t)((x->last - x->first) / period + 0.5f);
     if (cycles == 0U)
         return x->hi - x->lo;
+    if (cycles > 32U) cycles = 32U; /* 稳态波最多平均32个周期，控制高频计算时间。 */
     median = period >= 128.0f ? 3U : 1U; /* 点数足够才做中值，避免高频峰顶被邻点明显压低。 */
 
     /* 一个周期分成128个相位；先平均各周期的同相位点，再找峰谷。
@@ -163,7 +164,7 @@ static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch,
     return high - low;
 }
 
-/* 用窗口内的方差开方计算AC RMS，再算通用峰峰码差；两者乘同一真实每码电压。 */
+/* 用窗口内的方差开方计算AC RMS，再算通用峰峰码差；两者乘同一本帧估计每码电压。 */
 static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, uint32_t end,
                             unsigned ch, float fs, const Channel *x,
                             const MeterCalibration *cal, MeterResult *r)
