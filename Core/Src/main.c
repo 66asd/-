@@ -195,6 +195,7 @@ static void stop_frame(void)
 
 static void sweep_poll(uint32_t now)
 {
+    static unsigned descending;
     if (word_count) {
         if (sent < word_count) {
             if (SPI1->SR & SPI_SR_TXE) SPI1->DR = words[sent++];
@@ -213,7 +214,9 @@ static void sweep_poll(uint32_t now)
         acquisition = ARM_FRAME;
     } else if (now - applied_at >= DWELL_MS) {
         stop_frame();
-        queue_frequency(sweep_set_hz == 30000 ? 100 : sweep_set_hz + 100, 0);
+        if (sweep_set_hz == 30000) descending = 1;
+        if (sweep_set_hz == 100) descending = 0;
+        queue_frequency(descending ? sweep_set_hz - 100 : sweep_set_hz + 100, 0);
     }
 }
 

@@ -53,8 +53,8 @@ spi = 0x40013000
 cpu.mem_write(spi + 8, struct.pack("<I", 2))
 now = 0xffffff00
 call("queue_frequency", 100, 1)
-for idx in range(301):
-    hz = (idx % 300 + 1) * 100
+frequencies = [*range(100, 30001, 100), *range(29900, 99, -100), 200]
+for idx, hz in enumerate(frequencies):
     bank = (idx & 1) << 13
     tuning = ((hz << 28) + 12500000) // 25000000
     expected = ([0x2100] if idx == 0 else []) + [
@@ -82,4 +82,4 @@ for hz in range(100, 30001, 100):
     assert relative < 0.001, (hz, relative)
     worst = max(worst, relative)
 assert result([350]*2048, 500000) == 0
-print(f"300 plateaus + wrap, 300 noisy sine frames + DC passed. Worst {100*worst:.5f}%")
+print(f"Both sweep reversals, 300 noisy sine frames + DC passed. Worst {100*worst:.5f}%")

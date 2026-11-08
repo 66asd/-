@@ -9,13 +9,15 @@
 | PA4 | FSYNC |
 | PA5 | SCLK |
 | PA7 | SDATA |
-| PA0（ADC1_IN0） | 模块模拟 OUT，与示波器 CH1 并接 |
+| PA0（ADC1_IN0，可选） | 需要 STM32 实测频率时，从模块模拟 OUT 接一根线到 PA0 |
 | GND | 模块 GND 和示波器探头地 |
 | PA13、PA14 | ST-LINK 的 SWDIO、SWCLK |
 
 按模块额定电压供电，并确认控制输入兼容 3.3 V。接 PA0 前用示波器直流耦合确认整个波形都在 0 至 VDDA 之间。若模块输出带负压或超过 3.3 V，先偏置或衰减。PA0 断开时仍可在 OUT 观察扫频，悬空 ADC 的读数无意义。
 
-复位后从 100 Hz 开始，每 100 ms 增加 100 Hz。30 kHz 也保持 100 ms，再回到 100 Hz。每轮 300 档，约 30 s。示波器打开上升沿触发与频率读数，低端可用 2 ms/div，高端可用 10 µs/div。跨换档边界的自动频率读数可能混合两档。
+只看扫频时，示波器 CH1 探头尖接 OUT，地夹接公共 GND 即可。需要比较示波器读数与 MCU 的测频结果时，再把 OUT 并接到 PA0。两者观察同一节点，只需一支探头。扫频由 SPI 写入的频率字控制，PA0 的测量结果不参与换档。
+
+复位后从 100 Hz 开始，每 100 ms 升高 100 Hz。到 30 kHz 后下一档为 29.9 kHz，随后逐档降至 100 Hz，再从 200 Hz 开始上升。两个端点各停留一档，从一次 100 Hz 到下一次 100 Hz 约 59.8 s。示波器打开上升沿触发与频率读数，低端可用 2 ms/div，高端可用 10 µs/div。跨换档边界的自动频率读数可能混合两档。
 
 Keil Watch 中观察 `sweep_set_hz`（当前设定，Hz）和 `measured_millihz`（本档 PA0 实测，除以 1000 得 Hz）。每次换档清零实测值，等待 3 ms 后启动单帧采集，有效帧完成才更新。弱信号、异常周期和直流帧返回 0。
 
@@ -29,4 +31,4 @@ Keil Watch 中观察 `sweep_set_hz`（当前设定，Hz）和 `measured_millihz`
 
 ## 验证
 
-Keil Rebuild 后在安装 Unicorn 2 的 Python 环境运行 `python Tests/check_firmware.py`。该测试执行 HEX 中的 ARM 指令，检查所有调谐字、末档回绕、带偏置及噪声的 300 个正弦输入和直流输入。实物精度需在平台稳定段与独立仪器比对。
+Keil Rebuild 后在安装 Unicorn 2 的 Python 环境运行 `python Tests/check_firmware.py`。该测试执行 HEX 中的 ARM 指令，检查上下扫各档调谐字、两个端点换向、带偏置及噪声的 300 个正弦输入和直流输入。实物精度需在平台稳定段与独立仪器比对。
