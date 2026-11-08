@@ -7,9 +7,9 @@
  * x保存通道中间统计量，cal提供物理换算单位，r是本帧结果输出。 */
 #define PI_F                3.14159265358979323846f
 #define MIN_SPAN_CODES      12.0f /* 原始峰谷不足12码时认为信号过小。 */
-#define CHECK_MIN_HZ        100.0f /* 频率有效性检查下限；不是输出频率设定。 */
-#define CHECK_MAX_HZ        50000.0f /* 频率数值检查上限；不代表整个算法在50kHz仍有保证。 */
-#define CROSS_LIMIT_HZ      20000.0f /* 相邻有效穿越至少间隔fs/20000点；实际穿越判定另有限制。 */
+#define CHECK_MIN_HZ        99.5f /* 100Hz边界留0.5%测量抖动余量，不钳位显示值。 */
+#define CHECK_MAX_HZ        30150.0f /* 30kHz边界留0.5%测量抖动余量；不是更高频的精度保证。 */
+#define CROSS_LIMIT_HZ      60000.0f /* 穿越去重间隔；必须短于30kHz周期，不能沿用20kHz限值。 */
 #define FREQ_TOLERANCE      0.03f /* 两路测得频率差不超过S1的3%，才按同频处理相位。 */
 
 /* 计算过程用的中间量，单位是ADC码值；最终结果才换算成V。 */
@@ -78,8 +78,8 @@ static float frequency(const uint32_t *p, uint32_t count, unsigned ch,
         }
         a = b;
     }
-    if (crossings < 3U)
-        return 0; /* 穿越太少，不把一个偶然跳变当成稳定周期。 */
+    if (crossings < 2U)
+        return 0; /* 至少两个有效上升穿越才有一个完整周期；4096点可覆盖100Hz的两个周期。 */
     /* N次穿越之间只有N-1个周期；用首末距离平均周期，减少单个穿越误差。 */
     return fs * (crossings - 1U) / (x->last - x->first);
 }
@@ -129,6 +129,7 @@ static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch,
     cycles = (uint32_t)((x->last - x->first) / period + 0.5f);
     if (cycles == 0U)
         return x->hi - x->lo;
+    if (cycles > 32U) cycles = 32U; /* 稳态波最多叠加32周期，限制高频下的计算时间。 */
     median = period >= 128.0f ? 3U : 1U; /* 点数足够才做中值，避免高频峰顶被邻点明显压低。 */
 
     /* 一个周期分成128个相位；先平均各周期的同相位点，再找峰谷。
@@ -161,15 +162,15 @@ static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch,
     return high - low;
 }
 
-/* 用窗口内的方差开方计算AC RMS，再算通用峰峰码差；两者乘同一真实每码电压。 */
-static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, uint32_t end,
-                            unsigned ch, float fs, const Channel *x,
+/* 只计算本路AC RMS；Vpp稍后优先拟合正弦，不能采用正弦模型时再做周期平均。 */
+static void voltage_results(const uint32_t *p, uint32_t start, uint32_t end,
+                            unsigned ch, const Channel *x,
                             const MeterCalibration *cal, MeterResult *r)
 {
     uint32_t i, n = end - start; /* 处理区间[start,end)，n为其中点数；end那一点不参与。 */
     /* v为去掉全帧大致直流后的码值；sum累加v，sq累加v*v。
-     * mean为当前窗口残留均值；variance为交流均方；span为去噪后的峰峰码差。 */
-    float sum = 0, sq = 0, v, mean, variance, span;
+     * mean为当前窗口残留均值；variance为交流均方。 */
+    float sum = 0, sq = 0, v, mean, variance;
     float step = cal->volts_per_code; /* V5由App提前用本帧VDDA/4096得到，单位V/码。 */
 
     for (i = start; i < end; ++i)
@@ -186,13 +187,11 @@ static void voltage_results(const uint32_t *p, uint32_t count, uint32_t start, u
         variance = 0; /* 浮点舍入可能得到极小负数，不能直接开方。 */
 
     r->ac_rms_v[ch] = sqrtf(variance) * step;
-    span = filtered_span(p, count, ch, fs, r->frequency_hz[ch], x);
-    r->vpp_v[ch] = span * step;
 }
 
 /* 独立拟合一路：v≈a*cos(ωi)+b*sin(ωi)+直流。
  * 峰值=sqrt(a*a+b*b)，正弦Vpp=2×峰值；phase输出该路基波相位（弧度）。 */
-static void fit_channel(const uint32_t *p, uint32_t start, uint32_t end,
+static uint8_t fit_channel(const uint32_t *p, uint32_t start, uint32_t end,
                         unsigned ch, float hz, float fs, const Channel *x,
                         const MeterCalibration *cal, MeterResult *r, float *phase)
 {
@@ -235,7 +234,7 @@ static void fit_channel(const uint32_t *p, uint32_t start, uint32_t end,
     if (det < 1.0f)
     {
         r->flags |= MEAS_FLAG_FREQ;
-        return;
+        return 0;
     }
     a = (xc * zz - xs * cz) / det;
     b = (xs * cc - xc * cz) / det;
@@ -245,18 +244,21 @@ static void fit_channel(const uint32_t *p, uint32_t start, uint32_t end,
     /* 三角波、方波不能套用正弦幅度，继续使用周期平均峰谷差。 */
     /* 99.75%是模型适用性门槛，不乘在幅度上；波形不像正弦就保留通用Vpp。 */
     if (energy > 0 && fitted >= energy * 0.9975f)
-        r->vpp_v[ch] = 2.0f * sqrtf(a * a + b * b) *
-                       cal->volts_per_code;
+    {
+        r->vpp_v[ch] = 2.0f * sqrtf(a * a + b * b) * cal->volts_per_code;
+        return 1; /* 已得到正弦Vpp，不必再执行通用周期平均。 */
+    }
+    return 0; /* 保留基波相位，Vpp改用通用算法。 */
 }
 
-/* App在DMA采满后调用的总入口：质量/频率 -> RMS/通用Vpp -> 正弦拟合与相位。 */
+/* App在DMA采满后调用：质量/频率 -> 每路RMS -> 正弦拟合或通用Vpp -> 同频相位差。 */
 void Signal_Analyze(const uint32_t *p, uint32_t count, float fs,
                     const MeterCalibration *cal, MeterResult *r)
 {
     Channel x[2]; /* 两路各自的平均码、原始峰谷及穿越位置。 */
-    uint32_t start, end; /* 尽量选S1完整周期窗口，减少截取半个周期造成的RMS偏差。 */
+    uint32_t start, end; /* 同频测相位用共同窗口；不同频时每路选自己的完整周期。 */
     unsigned ch; /* 通道循环序号，0=S1，1=S2。 */
-    uint8_t same_frequency; /* 两路均合格且频率接近时为1；只有这种情况才输出相位差。 */
+    uint8_t fitted, same_frequency; /* fitted表示本路已得到正弦Vpp；same_frequency表示两路可共用窗口测相位。 */
     float phase[2] = {0}, hz; /* phase为每路拟合相位（弧度）；hz为本次拟合使用的频率。 */
 
     /* 先清掉旧字段，避免信号无效、提前返回时，残留上一帧相位等数据。 */
@@ -277,28 +279,30 @@ void Signal_Analyze(const uint32_t *p, uint32_t count, float fs,
         r->flags |= r->channel_flags[ch];
     }
 
-    /* 第二步：两路共用S1首末穿越之间的窗口，尽量按整数周期计算有效值。 */
-    start = (uint32_t)ceilf(x[0].first);
-    end = (uint32_t)ceilf(x[0].last);
-    if (end <= start + 10U || end > count)
-    {
-        start = 0;
-        end = count; /* 没有可靠周期时，仍可用全帧观察幅值，但不承诺相位。 */
-    }
-    for (ch = 0; ch < 2; ++ch)
-        voltage_results(p, count, start, end, ch, fs, &x[ch], cal, r);
-
-    /* 同频的两路使用同一拟合频率和窗口，保持相位的共同时间基准。 */
+    /* 同频时共用S1窗口和拟合频率，保持两路相位的共同时间基准。 */
     same_frequency = r->flags == 0U &&
         fabsf(r->frequency_hz[0] - r->frequency_hz[1]) <=
         FREQ_TOLERANCE * r->frequency_hz[0];
     for (ch = 0; ch < 2; ++ch)
     {
+        const Channel *window = same_frequency ? &x[0] : &x[ch];
+        start = (uint32_t)ceilf(window->first);
+        end = (uint32_t)ceilf(window->last);
+        if (end <= start + 4U || end > count)
+        {
+            start = 0;
+            end = count; /* 无可靠周期时仍可观察幅度，频率/相位由标志判无效。 */
+        }
+        voltage_results(p, start, end, ch, &x[ch], cal, r);
+        fitted = 0;
         if (r->channel_flags[ch] == 0U)
         {
             hz = same_frequency ? r->frequency_hz[0] : r->frequency_hz[ch];
-            fit_channel(p, start, end, ch, hz, fs, &x[ch], cal, r, &phase[ch]);
+            fitted = fit_channel(p, start, end, ch, hz, fs, &x[ch], cal, r, &phase[ch]);
         }
+        if (!fitted)
+            r->vpp_v[ch] = filtered_span(p, count, ch, fs, r->frequency_hz[ch], &x[ch]) *
+                           cal->volts_per_code;
     }
     if (r->flags != 0U)
         return;
