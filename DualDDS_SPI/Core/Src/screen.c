@@ -85,7 +85,8 @@ static void meter(unsigned index){
         if(r->hz)snprintf(v,sizeof(v),"%uHz",r->hz);else strcpy(v,"--");
     }else{
         unsigned m=index%3==1?r->rms_mv:r->pp_mv;
-        snprintf(v,sizeof(v),"%u.%02uV",m/1000,(m%1000)/10);
+        if (r->clipped) strcpy(v,"CLIP");
+        else snprintf(v,sizeof(v),"%umV",m);
     }
     textcmd(names[index],v);
 }
@@ -104,16 +105,14 @@ void screen_tick(void){
     }
     if(page!=3)return;
     if(!paint){
-        if(nextframe && (int32_t)(now-nextframe)<0)return;
-        const uint32_t *p=sample_take();if(!p)return;
-        measure(p);paint=1;plot=0;nextframe=now+1600;
+        
+        const uint32_t *p=sample_take();if(!p || !span_ready(p))return;
+        measure(p);paint=1;plot=0;
     }
     if(plot<7)meter(plot);
-    else if(plot==7)send("cle 1,0");
-    else if(plot==8)send("cle 17,0");
     else{
-        unsigned i=(plot-9)/2,ch=(plot-9)%2;char cmd[32];
+        unsigned i=(plot-7)/2,ch=(plot-7)%2;char cmd[32];
         snprintf(cmd,sizeof(cmd),"add %u,0,%u",ch?17:1,trace[ch][i]);send(cmd);
     }
-    if(++plot==9+2*PLOT_WIDTH)paint=0;
+    if(++plot==7+2*PLOT_WIDTH)paint=0;
 }
