@@ -8,6 +8,7 @@ static volatile unsigned txpos,txlen;
 static uint8_t frame[8],used;
 static unsigned page=255,row,dirty=1,plot,paint;
 static uint32_t nextframe,query;
+static const DisplayFrame *display;
 void screen_uart_irq(void){
     uint32_t sr=USART1->SR;
     if(sr&(USART_SR_RXNE|USART_SR_ORE|USART_SR_NE|USART_SR_FE)){
@@ -34,7 +35,7 @@ static void receive(uint8_t b){
     frame[used++]=b;
     if(used<3 || memcmp(frame+used-3,"\xff\xff\xff",3))return;
     if(used>=7 && frame[used-7]==0x65 && frame[used-6]<=4 && frame[used-4]==0){
-        unsigned p=frame[used-6]; page=p;settings_key(p,frame[used-5]);
+        unsigned p=frame[used-6]; if(page!=p)screen_invalidate(); page=p;settings_key(p,frame[used-5]);
     }else if(used>=5 && frame[used-5]==0x66 && frame[used-4]<=4){
         if(page!=frame[used-4]){page=frame[used-4];screen_invalidate();}
     }else if(used>=4 && frame[used-4]==0x88){page=255;screen_invalidate();query=0;}
@@ -69,15 +70,17 @@ static void controls(void){
 }
 static void meter(unsigned index){
     static const char *const names[]={"t1","t3","t5","t7","t9","t11","t13"};
-    Reading *r=reading+(index>=3);char v[24];
+    const Reading *reading=display->reading;
+    const Reading *r=reading+(index>=3);char v[24];
     if(index==7){
         /* The frequency heading also carries S2 input quality. Measurement
            fields keep reporting the actual ADC waveform, even at a rail. */
-        textcmd("t6",reading[1].clipped ? "CLIP" : "S2 Hz");
+        static const char *const labels[]={"S2 Hz","CLIP","NO Hz","DIST"};
+        textcmd("t6",labels[display->status]);
         return;
     }
     if(index==6){
-        Reading *a=reading,*b=reading+1;
+        const Reading *a=reading,*b=reading+1;
         unsigned diff=a->hz>b->hz?a->hz-b->hz:b->hz-a->hz;
         if(!a->hz || !b->hz)strcpy(v,"NO Hz");
         else if(diff*200>a->hz)strcpy(v,"DIFF");
@@ -112,13 +115,14 @@ void screen_tick(void){
     if(page!=3)return;
     if(!paint){
         
-        const uint32_t *p=sample_take();if(!p || !span_ready(p))return;
-        measure(p);paint=1;plot=0;
+        display=measurement_acquire();
+        if(!display)return;
+        paint=1;plot=0;
     }
     if(plot<8)meter(plot);
     else{
         unsigned i=(plot-8)/2,ch=(plot-8)%2;char cmd[32];
-        snprintf(cmd,sizeof(cmd),"add %u,0,%u",ch?17:1,trace[ch][i]);send(cmd);
+        snprintf(cmd,sizeof(cmd),"add %u,0,%u",ch?17:1,display->trace[ch][i]);send(cmd);
     }
     if(++plot==8+2*PLOT_WIDTH)paint=0;
 }

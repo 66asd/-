@@ -1,7 +1,20 @@
 #include "system_app.h"
 #include <math.h>
-Reading reading[2];
-uint8_t trace[2][PLOT_WIDTH];
+static DisplayFrame frames[2];
+static unsigned back, ready;
+static uint32_t sequence;
+volatile uint32_t measurement_last_cycles, measurement_max_cycles;
+
+void measurement_changed(void) { ready = 0; }
+
+const DisplayFrame *measurement_acquire(void)
+{
+    if (!ready) return 0;
+    const DisplayFrame *result = &frames[back];
+    back ^= 1U;
+    ready = 0;
+    return result;
+}
 static unsigned channel(uint32_t pair,unsigned ch){
     return ch ? (pair>>16)&0xfff : pair&0xfff;
 }
@@ -28,74 +41,79 @@ static uint32_t vpp_sample(const uint32_t *p, uint32_t count, uint32_t i,
     return b;
 }
 
-/* 通用Vpp：按测得周期将多周期对齐，同相位求平均，再找峰谷；返回值仍是ADC码差。 */
-static float filtered_span(const uint32_t *p, uint32_t count, unsigned ch,
-                           float fs, float hz, float first, float last, unsigned raw_span)
+/* S1: align 128 phase bins using Q8 positions. */
+static float filtered_span(const uint32_t *p, const Reading *r, unsigned raw_span)
 {
-    /* bin是128个相位位置的序号；cycle是周期序号；cycles是可叠加周期数。
-     * i为左侧样本下标；median=3启用三点中值，=1直接取原码。 */
-    uint32_t bin, cycle, cycles, i, median;
-    /* period为每周期点数；pos为待插值的位置；a/b为左右两点；sum为同相位累加。
-     * v为该相位的周期平均码；low/high记录平均后波形的峰谷，不是原始极端噪声点。 */
-    float period, pos, sum, a, b, v, low = 4095, high = 0;
-
-    /* 没有可靠周期时不做对齐，保留幅度观察，频率错误仍由原来的标志报告。 */
-    if (hz <= 0)
-        return raw_span;
-    period = fs / hz; /* 500Hz对应400点/周期，10kHz对应20点/周期（当fs=200k）。 */
-    cycles = (uint32_t)((last - first) / period + 0.5f);
-    if (cycles == 0U)
-        return raw_span;
-    if (cycles > 32U) cycles = 32U; /* 稳态波最多平均32个周期，控制高频计算时间。 */
-    median = period >= 128.0f ? 3U : 1U; /* 点数足够才做中值，避免高频峰顶被邻点明显压低。 */
-
-    /* 一个周期分成128个相位；先平均各周期的同相位点，再找峰谷。
-     * 不把整帧中碰巧最大的噪声点当成峰值，也不需要额外的采样数组。
-     */
-    for (bin = 0; bin < 128U; ++bin)
-    {
-        pos = first + period * bin / 128.0f;
-        sum = 0;
-        for (cycle = 0; cycle < cycles; ++cycle)
-        {
-            i = (uint32_t)pos;
-            if (i + 1U >= count)
-                break;
-            a = (float)vpp_sample(p, count, i, ch, median);
-            b = (float)vpp_sample(p, count, i + 1U, ch, median);
-            /* 相位通常落在两个样本之间，线性插值避免直接取整造成抖动。 */
-            sum += a + (b - a) * (pos - i);
-            pos += period;
+    if (!r->period_q8) return raw_span;
+    unsigned cycles = ((HALF_PAIRS-1U)*256U-r->first_q8)/r->period_q8;
+    if (cycles > 32U) cycles = 32U;
+    if (!cycles) return raw_span;
+    unsigned median = r->period_q8 >= 128U*256U ? 3U : 1U;
+    unsigned low = 4095U*256U*cycles, high = 0;
+    unsigned bins = (r->period_q8 + 63U)/64U;
+    if (bins > 128U) bins = 128U;
+    for (unsigned bin = 0; bin < bins; ++bin) {
+        unsigned pos = r->first_q8 + bin*r->period_q8/bins;
+        unsigned sum = 0;
+        for (unsigned c = 0; c < cycles; ++c, pos += r->period_q8) {
+            unsigned i = pos >> 8, frac = pos & 255U;
+            unsigned a = vpp_sample(p, HALF_PAIRS, i, 0, median);
+            unsigned b = vpp_sample(p, HALF_PAIRS, i+1, 0, median);
+            sum += a*(256U-frac) + b*frac;
         }
-        if (cycle == 0U)
-            continue;
-        v = sum / cycle;
-        if (v < low)
-            low = v;
-        if (v > high)
-            high = v;
+        if (sum < low) low = sum;
+        if (sum > high) high = sum;
     }
-    /* shortcut: 适合稳定周期波；突发信号需要另设测量方式。 */
-    return high - low;
+    return (float)(high-low)/(256U*cycles);
 }
 
-/* Four consecutive DMA halves reproduce the 4096-point CH0 extrema window
-   without a second raw buffer. At short sweep dwells publish one settled half. */
-static unsigned blocks, low2, high2;
-void reset_span(void) { blocks = 0; }
-int span_ready(const uint32_t *pairs)
+static const int16_t quarter[65] = {0,25,50,75,100,125,150,175,200,224,249,273,297,321,345,369,392,415,438,460,483,505,526,548,569,590,610,630,650,669,688,706,724,742,759,775,792,807,822,837,851,865,878,891,903,915,926,936,946,955,964,972,980,987,993,999,1004,1009,1013,1016,1019,1021,1023,1024,1024};
+static int sine_basis(unsigned phase)
 {
-    if (!blocks) { low2 = 4095; high2 = 0; }
-    for (unsigned i = 0; i < HALF_PAIRS; ++i) {
-        unsigned x = channel(pairs[i], 1);
-        if (x < low2) low2 = x;
-        if (x > high2) high2 = x;
-    }
-    ++blocks;
-    if (blocks < 4 && !source[0].sweep && !source[1].sweep) return 0;
-    blocks = 0;
-    return 1;
+    unsigned i = phase & 63U;
+    int v = quarter[(phase & 64U) ? 64U-i : i];
+    return (phase & 128U) ? -v : v;
 }
+
+static float sine_span(const uint32_t *pairs, const Reading *r, unsigned mid,
+                       DisplayFrame *out)
+{
+    unsigned raw = out->raw_max - out->raw_min;
+    out->residual_codes = 0;
+    out->status = r->clipped ? FIT_CLIP : FIT_UNLOCKED;
+    if (r->clipped || !r->period_q8) return raw;
+
+    /* Eliminate the DC column from the sine/cosine normal equations. */
+    int ss=0, cc=0, sc=0, sum_s=0, sum_c=0, sum_y=0;
+    int64_t sy=0, cy=0, yy=0;
+    uint32_t phase=0, increment=(uint32_t)((1ULL<<40)/r->period_q8);
+    for (unsigned i=0; i<HALF_PAIRS; ++i, phase+=increment) {
+        unsigned index=(phase+0x00800000U)>>24;
+        int sn=sine_basis(index), cs=sine_basis(index+64U);
+        int y=(int)channel(pairs[i],1)-(int)mid;
+        sum_s+=sn; sum_c+=cs; sum_y+=y;
+        ss+=sn*sn; cc+=cs*cs; sc+=sn*cs;
+        sy+=sn*y; cy+=cs*y; yy+=y*y;
+    }
+    float n=HALF_PAIRS;
+    float u=ss-(float)sum_s*sum_s/n, v=cc-(float)sum_c*sum_c/n;
+    float w=sc-(float)sum_s*sum_c/n;
+    float ys=sy-(float)sum_s*sum_y/n, yc=cy-(float)sum_c*sum_y/n;
+    float det=u*v-w*w;
+    if (det<=0) return raw;
+    float a=(v*ys-w*yc)/det, b=(u*yc-w*ys)/det;
+    float amplitude=1024.0f*sqrtf(a*a+b*b);
+    float error=(yy-(float)sum_y*sum_y/n-a*ys-b*yc)/n;
+    out->residual_codes=error>0 ? sqrtf(error) : 0;
+    if (amplitude<6) return raw;
+    if (out->residual_codes>2.0f+0.12f*amplitude) {
+        out->status=FIT_DISTORTED;
+        return raw;
+    }
+    out->status=FIT_OK;
+    return 2*amplitude;
+}
+
 /* Display-only symmetric FIR. Keep sparse high-frequency samples intact. */
 static unsigned plot_code(const uint32_t *pairs, unsigned i, unsigned ch,
                           unsigned radius)
@@ -110,7 +128,8 @@ static unsigned plot_code(const uint32_t *pairs, unsigned i, unsigned ch,
     return (sum + weight / 2U) / weight;
 }
 
-void measure(const uint32_t *pairs){
+static void measure(const uint32_t *pairs, DisplayFrame *out){
+    Reading *reading=out->reading;
     unsigned trigger=0,window=DEFAULT_WINDOW;
     for(unsigned ch=0;ch<2;ch++){
         unsigned lo=4095,hi=0,sum=0,nedge=0,first=0,last=0,prev=0,armed=0;
@@ -122,7 +141,8 @@ void measure(const uint32_t *pairs){
             if(x>hi)hi=x;
             sum+=x;
         }
-        r->clipped = ch && (low2 <= 2 || high2 >= 4093);
+        r->clipped = lo <= 2 || hi >= 4093;
+        if(ch){out->raw_min=lo; out->raw_max=hi;}
         unsigned mid=sum/HALF_PAIRS,band=(hi-lo)/10;
         for(unsigned i=0;i<HALF_PAIRS;i++){
             unsigned x=channel(pairs[i],ch);
@@ -147,10 +167,12 @@ void measure(const uint32_t *pairs){
             sum+=x; squares+=x*x;
         }
         float rms=sqrtf((float)(squares*count-(uint64_t)sum*sum))/count;
-        float step=ch ? VDDA_MV*GAIN2_PERMILLE/(4095.0f*1000)
-                      : vdda_mv*GAIN1_PERMILLE/(4096.0f*1000);
-        float span=ch ? high2-low2 : filtered_span(pairs,HALF_PAIRS,0,FS_HZ,
-            r->period_q8 ? FS_HZ*256.0f/r->period_q8 : 0,first/256.0f,last/256.0f,hi-lo);
+        float step=(float)vdda_mv*(ch ? GAIN2_PERMILLE : GAIN1_PERMILLE)/(4096.0f*1000);
+        float span=ch ? sine_span(pairs,r,mid,out) : filtered_span(pairs,r,hi-lo);
+        if (ch && out->status == FIT_UNLOCKED) {
+            r->hz = 0;
+            r->period_q8 = 0;
+        }
         r->pp_mv=(unsigned)(span*step+0.5f);
         r->rms_mv=(unsigned)(rms*step+0.5f);
         if(ch==0){
@@ -167,12 +189,15 @@ void measure(const uint32_t *pairs){
         unsigned limit = (16U * reading[ch].period_q8 + 128U) / 256U;
         if (limit >= 2U && limit < window) window = limit;
     }
+    /* One reusable filtered window for both channels; raw snapshot stays intact. */
+    static uint16_t filtered[MAX_WINDOW];
     for (unsigned ch = 0; ch < 2; ++ch) {
         unsigned period = reading[ch].period_q8 / 256U;
         unsigned radius = period >= 100U ? 3U : period >= 50U ? 1U : 0U;
         unsigned low = 4095, high = 0;
         for (unsigned i = 0; i < window; ++i) {
             unsigned value = plot_code(pairs, trigger + i, ch, radius);
+            filtered[i] = (uint16_t)value;
             if (value < low) low = value;
             if (value > high) high = value;
         }
@@ -181,13 +206,28 @@ void measure(const uint32_t *pairs){
         for (unsigned col = 0; col < PLOT_WIDTH; ++col) {
             unsigned scale = PLOT_WIDTH - 1U;
             unsigned pos = col * (window - 1U);
-            unsigned i = trigger + pos / scale;
+            unsigned i = pos / scale;
             unsigned frac = pos % scale;
-            unsigned a = plot_code(pairs, i, ch, radius);
-            unsigned b = frac ? plot_code(pairs, i + 1U, ch, radius) : a;
+            unsigned a = filtered[i];
+            unsigned b = frac ? filtered[i+1U] : a;
             unsigned value = (a * (scale - frac) + b * frac + scale / 2U) / scale;
             int centered = 2 * (int)value - (int)(low + high);
-            trace[ch][col] = (uint8_t)(52 + centered * 44 / span);
+            out->trace[ch][col] = (uint8_t)(52 + centered * 44 / span);
         }
     }
+}
+
+void measurement_tick(void)
+{
+    const uint32_t *p = sample_take();
+    if (!p) return;
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    uint32_t start = DWT->CYCCNT;
+    measure(p, &frames[back]);
+    frames[back].sequence = ++sequence;
+    ready = 1;
+    measurement_last_cycles = DWT->CYCCNT - start;
+    if (measurement_last_cycles > measurement_max_cycles)
+        measurement_max_cycles = measurement_last_cycles;
 }

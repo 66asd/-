@@ -66,7 +66,7 @@ void sample_start(void) {
     check(HAL_ADCEx_MultiModeStart_DMA(&hadc1,(uint32_t*)dma,2*HALF_PAIRS));
     check(HAL_TIM_Base_Start(&htim3));
 }
-void sample_changed(void){reset_span();consumed=generation; discard=2;}
+void sample_changed(void){measurement_changed();consumed=generation; discard=2;}
 static unsigned safe(unsigned h){
     uint32_t left=DMA1_Channel1->CNDTR;
     return left && (h==0 ? left<=HALF_PAIRS : left>HALF_PAIRS);
@@ -75,13 +75,12 @@ const uint32_t *sample_take(void){
     uint32_t g=generation, delta=g-consumed;
     unsigned h=completed,i;
     if(!delta) return 0;
-    if(delta>1) reset_span();
     missed_frames+=delta-1; consumed=g;
     if(discard>=delta){discard-=delta;return 0;}
     discard=0;
-    if(!safe(h) || generation!=g){reset_span();return 0;}
+    if(!safe(h) || generation!=g){return 0;}
     for(i=0;i<HALF_PAIRS;i++) snapshot[i]=dma[h*HALF_PAIRS+i];
     __DMB();
-    if(!safe(h) || generation!=g){++raced_frames;reset_span();return 0;}
+    if(!safe(h) || generation!=g){++raced_frames;return 0;}
     return snapshot;
 }

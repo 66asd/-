@@ -21,7 +21,6 @@
 #define SPEED_DELTA_MS 10
 #define DWELL_MIN 50
 #define DWELL_MAX 2000
-#define VDDA_MV 3300
 /* ADC-pin mV to original mV, independently measured divider gains. */
 #define GAIN1_PERMILLE 1000
 #define GAIN2_PERMILLE 1000
