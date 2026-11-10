@@ -68,51 +68,49 @@ static float filtered_span(const uint32_t *p, const Reading *r, unsigned raw_spa
     return (float)(high-low)/(256U*cycles);
 }
 
-static const int16_t quarter[65] = {0,25,50,75,100,125,150,175,200,224,249,273,297,321,345,369,392,415,438,460,483,505,526,548,569,590,610,630,650,669,688,706,724,742,759,775,792,807,822,837,851,865,878,891,903,915,926,936,946,955,964,972,980,987,993,999,1004,1009,1013,1016,1019,1021,1023,1024,1024};
-static int sine_basis(unsigned phase)
+/* Integrate sample cells over fractional rising-edge boundaries in Q8 time.
+   Center before accumulating to keep DC offset out of the variance subtraction. */
+static float cycle_rms(const uint32_t *pairs, unsigned mid,
+                       unsigned first, unsigned last)
 {
-    unsigned i = phase & 63U;
-    int v = quarter[(phase & 64U) ? 64U-i : i];
-    return (phase & 128U) ? -v : v;
+    int64_t sum = 0;
+    uint64_t energy = 0;
+    unsigned weight = 0;
+    for (unsigned i = 0; i < HALF_PAIRS; ++i) {
+        int left = (int)(i*256U)-128;
+        int right = left+256;
+        if (left < (int)first) left = (int)first;
+        if (right > (int)last) right = (int)last;
+        if (right <= left) continue;
+        unsigned w = (unsigned)(right-left);
+        int value = (int)channel(pairs[i],1)-(int)mid;
+        sum += (int64_t)value*w;
+        energy += (uint64_t)(value*value)*w;
+        weight += w;
+    }
+    if (!weight) return 0;
+    float mean = (float)sum/weight;
+    float variance = (float)energy/weight-mean*mean;
+    return variance > 0 ? sqrtf(variance) : 0;
 }
 
-static float sine_span(const uint32_t *pairs, const Reading *r, unsigned mid,
-                       DisplayFrame *out)
+static float energy_span(const Reading *r, float rms, DisplayFrame *out)
 {
-    unsigned raw = out->raw_max - out->raw_min;
-    out->residual_codes = 0;
+    unsigned raw = out->raw_max-out->raw_min;
+    out->shape_error_codes = 0;
     out->status = r->clipped ? FIT_CLIP : FIT_UNLOCKED;
-    if (r->clipped || !r->period_q8) return raw;
+    if (r->clipped || !r->period_q8 || rms < 4.0f) return raw;
 
-    /* Eliminate the DC column from the sine/cosine normal equations. */
-    int ss=0, cc=0, sc=0, sum_s=0, sum_c=0, sum_y=0;
-    int64_t sy=0, cy=0, yy=0;
-    uint32_t phase=0, increment=(uint32_t)((1ULL<<40)/r->period_q8);
-    for (unsigned i=0; i<HALF_PAIRS; ++i, phase+=increment) {
-        unsigned index=(phase+0x00800000U)>>24;
-        int sn=sine_basis(index), cs=sine_basis(index+64U);
-        int y=(int)channel(pairs[i],1)-(int)mid;
-        sum_s+=sn; sum_c+=cs; sum_y+=y;
-        ss+=sn*sn; cc+=cs*cs; sc+=sn*cs;
-        sy+=sn*y; cy+=cs*y; yy+=y*y;
-    }
-    float n=HALF_PAIRS;
-    float u=ss-(float)sum_s*sum_s/n, v=cc-(float)sum_c*sum_c/n;
-    float w=sc-(float)sum_s*sum_c/n;
-    float ys=sy-(float)sum_s*sum_y/n, yc=cy-(float)sum_c*sum_y/n;
-    float det=u*v-w*w;
-    if (det<=0) return raw;
-    float a=(v*ys-w*yc)/det, b=(u*yc-w*ys)/det;
-    float amplitude=1024.0f*sqrtf(a*a+b*b);
-    float error=(yy-(float)sum_y*sum_y/n-a*ys-b*yc)/n;
-    out->residual_codes=error>0 ? sqrtf(error) : 0;
-    if (amplitude<6) return raw;
-    if (out->residual_codes>2.0f+0.12f*amplitude) {
-        out->status=FIT_DISTORTED;
+    /* AD9959 produces sine: Vpp = 2*sqrt(2)*AC_RMS.
+       This relationship requires a complete, unclipped sine wave. */
+    float span = 2.82842712474619f*rms;
+    out->shape_error_codes = fabsf(raw-span);
+    if (raw+8.0f < 0.85f*span || raw > 1.18f*span+8.0f) {
+        out->status = FIT_DISTORTED;
         return raw;
     }
-    out->status=FIT_OK;
-    return 2*amplitude;
+    out->status = FIT_OK;
+    return span;
 }
 
 /* Display-only symmetric FIR. Keep sparse high-frequency samples intact. */
@@ -163,13 +161,20 @@ static void measure(const uint32_t *pairs, DisplayFrame *out){
         unsigned count=end-begin;
         uint64_t squares=0;
         sum=0;
-        for(unsigned i=begin;i<end;++i){
+        for(unsigned i=begin;ch==0 && i<end;++i){
             unsigned x=channel(pairs[i],ch);
             sum+=x; squares+=x*x;
         }
-        float rms=sqrtf((float)(squares*count-(uint64_t)sum*sum))/count;
+        float rms;
+        if (ch) {
+            unsigned start = nedge>1 ? first : 0;
+            unsigned stop = nedge>1 ? last : (HALF_PAIRS-1U)*256U;
+            rms = cycle_rms(pairs,mid,start,stop);
+        } else {
+            rms=sqrtf((float)(squares*count-(uint64_t)sum*sum))/count;
+        }
         float step=(float)vdda_mv*(ch ? GAIN2_PERMILLE : GAIN1_PERMILLE)/(4096.0f*1000);
-        float span=ch ? sine_span(pairs,r,mid,out) : filtered_span(pairs,r,hi-lo);
+        float span=ch ? energy_span(r,rms,out) : filtered_span(pairs,r,hi-lo);
         if (ch && out->status == FIT_UNLOCKED) {
             r->hz = 0;
             r->period_q8 = 0;
@@ -180,7 +185,7 @@ static void measure(const uint32_t *pairs, DisplayFrame *out){
             adc_diagnostic.mean_code = mid;
             adc_diagnostic.reference_code = reference_code;
             adc_diagnostic.raw_pp_mv = (hi-lo)*step;
-            adc_diagnostic.fitted_pp_mv = span*step;
+            adc_diagnostic.estimated_pp_mv = span*step;
         }
         r->pp_mv=(unsigned)(span*step+0.5f);
         r->rms_mv=(unsigned)(rms*step+0.5f);

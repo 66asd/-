@@ -27,7 +27,7 @@ typedef enum { FIT_OK, FIT_CLIP, FIT_UNLOCKED, FIT_DISTORTED } FitStatus;
 typedef struct {
     Reading reading[2];
     uint16_t raw_min, raw_max;
-    float residual_codes;
+    float shape_error_codes;
     FitStatus status;
     uint32_t sequence;
     uint8_t trace[2][PLOT_WIDTH];
@@ -36,7 +36,7 @@ extern unsigned vdda_mv;
 /* One diagnostic result per completed software frame; sequence written last. */
 typedef struct {
     uint32_t min_code, max_code, mean_code, reference_code;
-    float raw_pp_mv, fitted_pp_mv;
+    float raw_pp_mv, estimated_pp_mv;
     uint32_t sequence;
 } AdcDiagnostic;
 extern volatile AdcDiagnostic adc_diagnostic;
