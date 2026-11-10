@@ -96,6 +96,20 @@ int span_ready(const uint32_t *pairs)
     blocks = 0;
     return 1;
 }
+/* Display-only symmetric FIR. Keep sparse high-frequency samples intact. */
+static unsigned plot_code(const uint32_t *pairs, unsigned i, unsigned ch,
+                          unsigned radius)
+{
+    unsigned sum = channel(pairs[i], ch) * (radius + 1U);
+    for (unsigned d = 1; d <= radius; ++d) {
+        unsigned left = i >= d ? i - d : 0;
+        unsigned right = i + d < HALF_PAIRS ? i + d : HALF_PAIRS - 1U;
+        sum += (radius + 1U - d) * (channel(pairs[left], ch) + channel(pairs[right], ch));
+    }
+    unsigned weight = (radius + 1U) * (radius + 1U);
+    return (sum + weight / 2U) / weight;
+}
+
 void measure(const uint32_t *pairs){
     unsigned trigger=0,window=DEFAULT_WINDOW;
     for(unsigned ch=0;ch<2;ch++){
@@ -148,21 +162,32 @@ void measure(const uint32_t *pairs){
             if(nedge && first/256+window<=HALF_PAIRS) trigger=first/256;
         }
     }
-    /* Independent vertical zoom; reserve 8 pixels above and below each trace.
-       Flat or noise-only inputs retain a minimum range instead of filling the screen. */
+    /* Shared time base: keep at least about 30 columns per fast cycle. */
     for (unsigned ch = 0; ch < 2; ++ch) {
+        unsigned limit = (16U * reading[ch].period_q8 + 128U) / 256U;
+        if (limit >= 2U && limit < window) window = limit;
+    }
+    for (unsigned ch = 0; ch < 2; ++ch) {
+        unsigned period = reading[ch].period_q8 / 256U;
+        unsigned radius = period >= 100U ? 3U : period >= 50U ? 1U : 0U;
         unsigned low = 4095, high = 0;
         for (unsigned i = 0; i < window; ++i) {
-            unsigned code = channel(pairs[trigger+i], ch);
-            if (code < low) low = code;
-            if (code > high) high = code;
+            unsigned value = plot_code(pairs, trigger + i, ch, radius);
+            if (value < low) low = value;
+            if (value > high) high = value;
         }
-        int span = (int)(high-low);
+        int span = (int)(high - low);
         if (span < 32) span = 32;
         for (unsigned col = 0; col < PLOT_WIDTH; ++col) {
-            unsigned pos = trigger + col*(window-1)/(PLOT_WIDTH-1);
-            int centered = 2*(int)channel(pairs[pos],ch) - (int)(low+high);
-            trace[ch][col] = (uint8_t)(52 + centered*44/span);
+            unsigned scale = PLOT_WIDTH - 1U;
+            unsigned pos = col * (window - 1U);
+            unsigned i = trigger + pos / scale;
+            unsigned frac = pos % scale;
+            unsigned a = plot_code(pairs, i, ch, radius);
+            unsigned b = frac ? plot_code(pairs, i + 1U, ch, radius) : a;
+            unsigned value = (a * (scale - frac) + b * frac + scale / 2U) / scale;
+            int centered = 2 * (int)value - (int)(low + high);
+            trace[ch][col] = (uint8_t)(52 + centered * 44 / span);
         }
     }
 }
