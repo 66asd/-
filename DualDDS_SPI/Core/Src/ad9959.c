@@ -29,7 +29,7 @@ HAL_StatusTypeDef AD9959_Init(void)
     HAL_Delay(1);
     uint32_t pll = PLL9959 == 1 ? 0 : PLL9959 << 18;
     if (SYS9959_HZ > 255000000UL) pll |= 0x800000UL;
-    HAL_StatusTypeDef result = write_register(0, 0x20, 1); /* CSR selects CH1 */
+    HAL_StatusTypeDef result = write_register(0, 0x10, 1); /* CSR selects CH1 */
     if (result == HAL_OK) result = write_register(1, pll, 3);
     if (result != HAL_OK) return result;
     latch();
