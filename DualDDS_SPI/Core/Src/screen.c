@@ -70,10 +70,17 @@ static void controls(void){
 static void meter(unsigned index){
     static const char *const names[]={"t1","t3","t5","t7","t9","t11","t13"};
     Reading *r=reading+(index>=3);char v[24];
+    if(index==7){
+        /* The frequency heading also carries S2 input quality. Measurement
+           fields keep reporting the actual ADC waveform, even at a rail. */
+        textcmd("t6",reading[1].clipped ? "CLIP" : "S2 Hz");
+        return;
+    }
     if(index==6){
         Reading *a=reading,*b=reading+1;
         unsigned diff=a->hz>b->hz?a->hz-b->hz:b->hz-a->hz;
-        if(!a->hz || !b->hz || diff*200>a->hz)strcpy(v,"--");
+        if(!a->hz || !b->hz)strcpy(v,"NO Hz");
+        else if(diff*200>a->hz)strcpy(v,"DIFF");
         else{
             int lag=(int)a->first_q8-(int)b->first_q8;
             int angle=lag*360/(int)a->period_q8%360;
@@ -85,8 +92,7 @@ static void meter(unsigned index){
         if(r->hz)snprintf(v,sizeof(v),"%uHz",r->hz);else strcpy(v,"--");
     }else{
         unsigned m=index%3==1?r->rms_mv:r->pp_mv;
-        if (r->clipped) strcpy(v,"CLIP");
-        else snprintf(v,sizeof(v),"%umV",m);
+        snprintf(v,sizeof(v),"%umV",m);
     }
     textcmd(names[index],v);
 }
@@ -109,10 +115,10 @@ void screen_tick(void){
         const uint32_t *p=sample_take();if(!p || !span_ready(p))return;
         measure(p);paint=1;plot=0;
     }
-    if(plot<7)meter(plot);
+    if(plot<8)meter(plot);
     else{
-        unsigned i=(plot-7)/2,ch=(plot-7)%2;char cmd[32];
+        unsigned i=(plot-8)/2,ch=(plot-8)%2;char cmd[32];
         snprintf(cmd,sizeof(cmd),"add %u,0,%u",ch?17:1,trace[ch][i]);send(cmd);
     }
-    if(++plot==7+2*PLOT_WIDTH)paint=0;
+    if(++plot==8+2*PLOT_WIDTH)paint=0;
 }
