@@ -11,7 +11,7 @@ void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *a){if(a==&hadc1) finished(0
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *a){if(a==&hadc1) finished(1);}
 void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *a){(void)a;check(HAL_ERROR);}
 #define REFERENCE_SAMPLES 64U
-unsigned vdda_mv;
+unsigned vdda_mv, reference_code;
 static HAL_StatusTypeDef measure_reference(uint32_t *sum)
 {
     ADC_ChannelConfTypeDef ref = {0}; /* 临时读取内部参考的通道配置，不覆盖外部信号的长期配置。 */
@@ -35,13 +35,14 @@ static HAL_StatusTypeDef measure_reference(uint32_t *sum)
     ref.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
     status = HAL_ADC_ConfigChannel(&hadc1, &ref);
     *sum = 0; /* 从空总和开始，不能把上一轮参考码混入本轮；sum指向调用者的总和变量。 */
-    for (i = 0; i < REFERENCE_SAMPLES && status == HAL_OK; ++i)
+    for (i = 0; i < REFERENCE_SAMPLES + 16U && status == HAL_OK; ++i)
     {
         status = HAL_ADC_Start(&hadc1);
         if (status != HAL_OK) break;
         status = HAL_ADC_PollForConversion(&hadc1, 5);
         if (status != HAL_OK) break;
-        *sum += HAL_ADC_GetValue(&hadc1) & 0xFFFU;
+        uint32_t value = HAL_ADC_GetValue(&hadc1) & 0xFFFU;
+        if (i >= 16U) *sum += value;
     }
     if (HAL_ADC_Stop(&hadc1) != HAL_OK)
         status = HAL_ERROR;
@@ -61,7 +62,8 @@ void sample_start(void) {
     SET_BIT(ADC1->CR2, ADC_CR2_TSVREFE);
     HAL_Delay(1);
     check(measure_reference(&sum));
-    vdda_mv = (1200U * 4096U * REFERENCE_SAMPLES + sum / 2) / sum;
+    reference_code = (sum + REFERENCE_SAMPLES/2U)/REFERENCE_SAMPLES;
+    vdda_mv = (VREFINT_TYP_MV * 4096U * REFERENCE_SAMPLES + sum / 2) / sum;
     check(HAL_ADC_Start(&hadc2));
     check(HAL_ADCEx_MultiModeStart_DMA(&hadc1,(uint32_t*)dma,2*HALF_PAIRS));
     check(HAL_TIM_Base_Start(&htim3));

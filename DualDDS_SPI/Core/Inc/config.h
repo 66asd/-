@@ -24,6 +24,7 @@
 /* ADC-pin mV to original mV, independently measured divider gains. */
 #define GAIN1_PERMILLE 1000
 #define GAIN2_PERMILLE 1000
+#define VREFINT_TYP_MV 1200U
 #define FS_HZ 100000UL
 #define HALF_PAIRS 1024U
 #define PLOT_WIDTH 479U

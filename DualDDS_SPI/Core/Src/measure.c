@@ -1,6 +1,7 @@
 #include "system_app.h"
 #include <math.h>
 static DisplayFrame frames[2];
+volatile AdcDiagnostic adc_diagnostic;
 static unsigned back, ready;
 static uint32_t sequence;
 volatile uint32_t measurement_last_cycles, measurement_max_cycles;
@@ -173,6 +174,14 @@ static void measure(const uint32_t *pairs, DisplayFrame *out){
             r->hz = 0;
             r->period_q8 = 0;
         }
+        if (ch) {
+            adc_diagnostic.min_code = lo;
+            adc_diagnostic.max_code = hi;
+            adc_diagnostic.mean_code = mid;
+            adc_diagnostic.reference_code = reference_code;
+            adc_diagnostic.raw_pp_mv = (hi-lo)*step;
+            adc_diagnostic.fitted_pp_mv = span*step;
+        }
         r->pp_mv=(unsigned)(span*step+0.5f);
         r->rms_mv=(unsigned)(rms*step+0.5f);
         if(ch==0){
@@ -226,6 +235,7 @@ void measurement_tick(void)
     uint32_t start = DWT->CYCCNT;
     measure(p, &frames[back]);
     frames[back].sequence = ++sequence;
+    adc_diagnostic.sequence = sequence;
     ready = 1;
     measurement_last_cycles = DWT->CYCCNT - start;
     if (measurement_last_cycles > measurement_max_cycles)

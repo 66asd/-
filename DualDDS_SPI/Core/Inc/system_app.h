@@ -33,6 +33,14 @@ typedef struct {
     uint8_t trace[2][PLOT_WIDTH];
 } DisplayFrame;
 extern unsigned vdda_mv;
+/* One diagnostic result per completed software frame; sequence written last. */
+typedef struct {
+    uint32_t min_code, max_code, mean_code, reference_code;
+    float raw_pp_mv, fitted_pp_mv;
+    uint32_t sequence;
+} AdcDiagnostic;
+extern volatile AdcDiagnostic adc_diagnostic;
+extern unsigned reference_code;
 void measurement_tick(void);
 void measurement_changed(void);
 const DisplayFrame *measurement_acquire(void);
