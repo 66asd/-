@@ -2,6 +2,10 @@
 #define MCLK9833_HZ 25000000UL
 #define REF9959_HZ 25000000UL
 #define PLL9959 20U /* 1 = bypass, or 4..20 */
+#define AD9959_OUTPUT_CHANNEL 0U /* Physical CH0..CH3 connector */
+#if AD9959_OUTPUT_CHANNEL > 3U
+#error Invalid AD9959 output channel
+#endif
 #define SYS9959_HZ (REF9959_HZ*PLL9959)
 #if (PLL9959 != 1 && (PLL9959 < 4 || PLL9959 > 20)) || SYS9959_HZ > 500000000UL
 #error Invalid AD9959 clock

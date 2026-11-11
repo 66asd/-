@@ -23,18 +23,25 @@ static void latch(void)
 
 HAL_StatusTypeDef AD9959_Init(void)
 {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+    HAL_Delay(10);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
     HAL_Delay(1);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
     HAL_Delay(1);
     uint32_t pll = PLL9959 == 1 ? 0 : PLL9959 << 18;
     if (SYS9959_HZ > 255000000UL) pll |= 0x800000UL;
-    HAL_StatusTypeDef result = write_register(0, 0x10, 1); /* CSR selects CH1 */
+    HAL_StatusTypeDef result = write_register(0, 0x10U << AD9959_OUTPUT_CHANNEL, 1);
     if (result == HAL_OK) result = write_register(1, pll, 3);
     if (result != HAL_OK) return result;
     latch();
-    HAL_Delay(5);
-    return write_register(3, 0x301, 3); /* full-scale DAC, sine */
+    HAL_Delay(10);
+    result = write_register(3, 0x301, 3); /* Full-scale DAC current, sine. */
+    if (result != HAL_OK) return result;
+    latch();
+    /* Finish initialization with a complete, nonzero output configuration. */
+    return AD9959_SetCH0(DEFAULT_F2, 0, 100);
 }
 
 HAL_StatusTypeDef AD9959_SetCH0(uint32_t hz, unsigned degrees, unsigned percent)
@@ -45,7 +52,8 @@ HAL_StatusTypeDef AD9959_SetCH0(uint32_t hz, unsigned degrees, unsigned percent)
     uint16_t amplitude = 0x1000U | ((percent * 1023U + 50U) / 100U);
 
     /* All three shadow registers take effect together. */
-    HAL_StatusTypeDef result = write_register(4, ftw, 4);
+    HAL_StatusTypeDef result = write_register(0, 0x10U << AD9959_OUTPUT_CHANNEL, 1);
+    if (result == HAL_OK) result = write_register(4, ftw, 4);
     if (result == HAL_OK) result = write_register(5, phase, 2);
     if (result == HAL_OK) result = write_register(6, amplitude, 3);
     if (result == HAL_OK) latch();
