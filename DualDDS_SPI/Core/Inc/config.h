@@ -29,6 +29,11 @@
 #define GAIN1_PERMILLE 1000
 #define GAIN2_PERMILLE 1000
 #define VREFINT_TYP_MV 1200U
+/* Measured VDDA on this board; 0 selects the uncalibrated VREFINT estimate. */
+#define ADC_VDDA_MV 3000U
+#if ADC_VDDA_MV != 0U && (ADC_VDDA_MV < 2400U || ADC_VDDA_MV > 3600U)
+#error Invalid measured ADC supply voltage
+#endif
 #define FS_HZ 100000UL
 #define HALF_PAIRS 1024U
 #define PLOT_WIDTH 479U

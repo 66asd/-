@@ -63,7 +63,11 @@ void sample_start(void) {
     HAL_Delay(1);
     check(measure_reference(&sum));
     reference_code = (sum + REFERENCE_SAMPLES/2U)/REFERENCE_SAMPLES;
+#if ADC_VDDA_MV
+    vdda_mv = ADC_VDDA_MV;
+#else
     vdda_mv = (VREFINT_TYP_MV * 4096U * REFERENCE_SAMPLES + sum / 2) / sum;
+#endif
     check(HAL_ADC_Start(&hadc2));
     check(HAL_ADCEx_MultiModeStart_DMA(&hadc1,(uint32_t*)dma,2*HALF_PAIRS));
     check(HAL_TIM_Base_Start(&htim3));

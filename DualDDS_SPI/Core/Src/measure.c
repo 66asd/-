@@ -174,7 +174,9 @@ static void measure(const uint32_t *pairs, DisplayFrame *out){
             rms=sqrtf((float)(squares*count-(uint64_t)sum*sum))/count;
         }
         float step=(float)vdda_mv*(ch ? GAIN2_PERMILLE : GAIN1_PERMILLE)/(4096.0f*1000);
-        float span=ch ? energy_span(r,rms,out) : filtered_span(pairs,r,hi-lo);
+        float estimate=ch ? energy_span(r,rms,out) : filtered_span(pairs,r,hi-lo);
+        /* Vpp is the acquired peak-to-peak voltage, including waveform distortion. */
+        float span=ch ? (float)(hi-lo) : estimate;
         if (ch && out->status == FIT_UNLOCKED) {
             r->hz = 0;
             r->period_q8 = 0;
@@ -185,7 +187,7 @@ static void measure(const uint32_t *pairs, DisplayFrame *out){
             adc_diagnostic.mean_code = mid;
             adc_diagnostic.reference_code = reference_code;
             adc_diagnostic.raw_pp_mv = (hi-lo)*step;
-            adc_diagnostic.estimated_pp_mv = span*step;
+            adc_diagnostic.estimated_pp_mv = estimate*step;
         }
         r->pp_mv=(unsigned)(span*step+0.5f);
         r->rms_mv=(unsigned)(rms*step+0.5f);
