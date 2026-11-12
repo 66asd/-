@@ -29,6 +29,7 @@ void settings_tick(void);
 typedef struct {unsigned hz,rms_mv,pp_mv,first_q8,period_q8,clipped; } Reading;
 extern Reading reading[2];
 extern volatile unsigned sine_fit_used[2];
+extern volatile unsigned measurement_cycles[2], measurement_ms;
 extern uint8_t trace[2][PLOT_WIDTH];
 extern unsigned vdda_mv;
 void reset_span(void);

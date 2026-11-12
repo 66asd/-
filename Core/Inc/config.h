@@ -26,7 +26,7 @@
 #define ADC_VDDA_CAL_MV 3020U
 #define ADC_VREFINT_CAL_MV 1200U
 #define ADC_CAL_ADDRESS 0x0800FC00UL /* Reserved last 1KB of the 64KB C8 flash. */
-#define ADC_REFERENCE_MS 1000U
+#define ADC_REFERENCE_MS 5000U
 #define DDS_ENABLED 0
 /* ADC-pin mV to original mV, independently measured divider gains. */
 #define GAIN1_PERMILLE 1000
@@ -42,6 +42,10 @@
 #define DEFAULT_WINDOW 400U
 /* 示波器式自动时基：横轴约 4 个周期（要求 3~5 个）。 */
 #define SCOPE_CYCLES 4U
+/* Measurement covers ~16 cycles; drawing has its own four-cycle timebase. */
+#define SCOPE_SAMPLES_PER_PERIOD 64U
+#define SCOPE_MIN_CYCLES 4U
+#define SCOPE_FRAME_MS 80U
 /* Verified in DualDDS2.HMI: b1=16, b2=17, s0=1, s1=15. */
 #define SCOPE_KEY_AUTO 16U
 #define SCOPE_KEY_STOP 17U

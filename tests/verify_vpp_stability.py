@@ -12,7 +12,7 @@ baseline = '--baseline' in sys.argv
 rng = np.random.default_rng(5382026)
 t = np.arange(1024)
 results = []
-for fs, frequency in [(180000, 1000), (600000, 40000), (600000, 99997)]:
+for fs, frequency in [(180000, 1000), (64000, 1000), (600000, 40000), (600000, 99997)]:
     values, fits = [], []
     for frame in range(32):
         phase = rng.uniform(-np.pi, np.pi)
@@ -29,7 +29,7 @@ for fs, frequency in [(180000, 1000), (600000, 40000), (600000, 99997)]:
             fits.extend(flags)
             assert all(flags), (frequency, frame, r, flags)
             assert np.all(abs(r[:, 0]/frequency-1) < .002), r
-    metric = {'frequency': frequency, 'frames_per_channel': 32,
+    metric = {'frequency': frequency, 'sample_hz': fs, 'frames_per_channel': 32,
               'min_mv': min(values), 'max_mv': max(values),
               'mean_mv': float(np.mean(values)), 'std_mv': float(np.std(values))}
     results.append(metric)

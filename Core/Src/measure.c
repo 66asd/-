@@ -1,12 +1,14 @@
 #include "system_app.h"
 #include <math.h>
 #include <string.h>
+#include "sine_table.h"
 #define PI2 6.28318530718f
 #define PROFILE 128U
 Reading reading[2];
 uint8_t trace[2][PLOT_WIDTH];
 /* Debugger diagnostics: 1 only when this frame passes the sine model checks. */
 volatile unsigned sine_fit_used[2];
+volatile unsigned measurement_cycles[2], measurement_ms;
 static float profile[2][PROFILE];
 static float periods[2], origins[2];
 static float display_seconds;
@@ -81,82 +83,110 @@ static int solve(float m[4][5], unsigned n, float x[4]) {
     for(unsigned i=0;i<n;++i)x[i]=m[i][n];
     return 1;
 }
-static void rotate(float *s, float *c, float sn, float cs, unsigned i) {
-    float next=*s*cs+*c*sn;
-    *c=*c*cs-*s*sn; *s=next;
-    if((i&63U)==63U) {
-        /* Correct oscillator roundoff without per-sample trigonometry. */
-        float scale=1.5f-0.5f*((*s)*(*s)+(*c)*(*c));
-        *s*=scale; *c*=scale;
-    }
+static int sine_q10(uint32_t phase) {
+    unsigned index=phase>>24, fraction=(phase>>8)&65535U;
+    int a=sine_table[index], delta=sine_table[index+1U]-a;
+    int value=a+(delta*(int)fraction)/65536;
+    return (value+(value>=0?16:-16))/32;
 }
 typedef struct { float a,b,dc,omega; } Sine;
 static int fit_sine(const uint32_t *p, unsigned ch, float mid, float period, Sine *f) {
-    const float center=(HALF_PAIRS-1U)*0.5f;
+    const int center=(int)(mid+0.5f);
     float sigma=4096, initial=PI2/period;
     f->a=0; f->b=0; f->dc=0; f->omega=initial;
-    /* First solve DC/sin/cos. Then jointly refine frequency and amplitude.
-       All 1024 original samples participate; no phase-bin peak selection. */
-    for(unsigned pass=0;pass<4U;++pass) {
-        float m[4][5]={{0}}, dx[4]={0}, error=0;
+    /* Keep the four-parameter fit, but use integer inner products on the F103
+       (no FPU). Only the tiny equation solve uses float. Every pass uses 1024 points. */
+    for(unsigned pass=0;pass<3U;++pass) {
+        float m[4][5]={{0}}, dx[4]={0};
+        int32_t normal[4][4]={{0}};
+        int64_t rhs[4]={0}; uint64_t error=0;
         unsigned n=pass?4U:3U;
-        float sn=sinf(f->omega), cs=cosf(f->omega);
-        float s=sinf(-center*f->omega), c=cosf(-center*f->omega);
-        float cutoff=fmaxf(2.0f,3.0f*sigma);
+        float amp=sqrtf(f->a*f->a+f->b*f->b);
+        if(amp>4096 || fabsf(f->dc)>4096)return 0;
+        if(amp<1)amp=1;
+        int aq=(int)(f->a*256), bq=(int)(f->b*256), dq=(int)(f->dc*256);
+        int an=(int)(f->a/amp*32768), bn=(int)(f->b/amp*32768);
+        int cutoff=(int)(fmaxf(2.0f,3.0f*sigma)*256);
+        uint32_t step=(uint32_t)(f->omega*(4294967296.0f/PI2));
+        uint32_t phase=0U-(uint32_t)((uint64_t)step*(HALF_PAIRS-1U)/2U);
         for(unsigned i=0;i<HALF_PAIRS;++i) {
-            float e=(float)code(p,i,ch)-mid-f->dc-f->a*s-f->b*c;
-            float h[4]={s,c,1,((float)i-center)/HALF_PAIRS*(f->a*c-f->b*s)};
-            /* Huber weights suppress isolated interference, not real amplitude steps. */
-            float weight=fabsf(e)>cutoff?cutoff/fabsf(e):1;
+            int s=sine_q10(phase), c=sine_q10(phase+0x40000000U);
+            int e=((int)code(p,i,ch)-center)*256-(aq*s+bq*c)/1024-dq;
+            int absolute=e<0?-e:e;
+            int weight=absolute>cutoff?cutoff*256/absolute:256;
+            int h[4]={s,c,1024,((an*c-bn*s)/32768)*(2*(int)i-(int)(HALF_PAIRS-1U))/(2*(int)HALF_PAIRS)};
             for(unsigned j=0;j<n;++j) {
-                for(unsigned k=0;k<n;++k)m[j][k]+=weight*h[j]*h[k];
-                m[j][n]+=weight*h[j]*e;
+                int weighted=weight*h[j];
+                for(unsigned k=j;k<n;++k)normal[j][k]+=(weighted*h[k])/256;
+                rhs[j]+=(int64_t)weighted*e;
             }
-            error+=weight*e*e;
-            rotate(&s,&c,sn,cs,i);
+            int whole=e/256;
+            error+=(uint64_t)(whole*whole)*weight;
+            phase+=step;
+        }
+        for(unsigned j=0;j<n;++j) {
+            for(unsigned k=j;k<n;++k)m[j][k]=m[k][j]=normal[j][k]/1048576.0f;
+            m[j][n]=(float)rhs[j]/67108864.0f;
         }
         if(!solve(m,n,dx))return 0;
-        float scale=pass && fabsf(dx[3])>0.75f?0.75f/fabsf(dx[3]):1;
+        float delta=dx[3]/amp;
+        float scale=pass && fabsf(delta)>0.75f?0.75f/fabsf(delta):1;
         f->a+=scale*dx[0]; f->b+=scale*dx[1]; f->dc+=scale*dx[2];
-        if(pass)f->omega+=scale*dx[3]/HALF_PAIRS;
-        sigma=sqrtf(error/HALF_PAIRS);
+        if(pass)f->omega+=scale*delta/HALF_PAIRS;
+        sigma=sqrtf((float)error/(HALF_PAIRS*256.0f));
     }
     if(f->omega<=0 || fabsf(f->omega/initial-1)>0.02f)return 0;
-    float amp=sqrtf(f->a*f->a+f->b*f->b), error=0, harmonic[4][2]={{0}};
-    if(amp<12)return 0;
-    float sn=sinf(f->omega), cs=cosf(f->omega);
-    float s=sinf(-center*f->omega), c=cosf(-center*f->omega);
-    float cutoff=fmaxf(2.0f,3.0f*sigma);
+    float amp=sqrtf(f->a*f->a+f->b*f->b);
+    if(amp<12 || amp>4096 || fabsf(f->dc)>4096)return 0;
+    uint64_t error=0; int64_t harmonic[4][2]={{0}};
+    int aq=(int)(f->a*256), bq=(int)(f->b*256), dq=(int)(f->dc*256);
+    int cutoff=(int)(fmaxf(2.0f,3.0f*sigma)*256);
+    uint32_t step=(uint32_t)(f->omega*(4294967296.0f/PI2));
+    uint32_t phase=0U-(uint32_t)((uint64_t)step*(HALF_PAIRS-1U)/2U);
     for(unsigned i=0;i<HALF_PAIRS;++i) {
-        float e=(float)code(p,i,ch)-mid-f->dc-f->a*s-f->b*c;
-        error+=e*e;
-        /* A noisy sine is acceptable; coherent 2nd..5th harmonics are not noise.
-           Clip only this diagnostic's residual so a few spikes cannot mimic THD. */
-        float residual=fmaxf(-cutoff,fminf(cutoff,e)), hs=s, hc=c;
+        int s=sine_q10(phase), c=sine_q10(phase+0x40000000U);
+        int e=((int)code(p,i,ch)-center)*256-(aq*s+bq*c)/1024-dq;
+        error+=(uint64_t)((int64_t)e*e);
+        int residual=e>cutoff?cutoff:e<-cutoff?-cutoff:e;
         for(unsigned h=0;h<4U;++h) {
-            float next=hs*c+hc*s; hc=hc*c-hs*s; hs=next;
-            harmonic[h][0]+=residual*hs; harmonic[h][1]+=residual*hc;
+            uint32_t hp=phase*(h+2U);
+            harmonic[h][0]+=(int64_t)residual*sine_q10(hp);
+            harmonic[h][1]+=(int64_t)residual*sine_q10(hp+0x40000000U);
         }
-        rotate(&s,&c,sn,cs,i);
+        phase+=step;
     }
-    if(error>HALF_PAIRS*amp*amp*0.01f)return 0;
+    if((float)error/(HALF_PAIRS*65536.0f)>amp*amp*0.01f)return 0;
     /* Include the finite-record noise floor instead of rejecting noisy sine frames. */
     float limit=0.003f*amp+4*sigma*sqrtf(2.0f/HALF_PAIRS);
     for(unsigned h=0;h<4U;++h) {
         /* Harmonics at/above Nyquist cannot be distinguished from their aliases. */
         if((h+2U)*f->omega>=PI2*0.5f)continue;
-        float magnitude=2*sqrtf(harmonic[h][0]*harmonic[h][0]+harmonic[h][1]*harmonic[h][1])/HALF_PAIRS;
+        float a=(float)harmonic[h][0]/(HALF_PAIRS*262144.0f);
+        float b=(float)harmonic[h][1]/(HALF_PAIRS*262144.0f);
+        float magnitude=2*sqrtf(a*a+b*b);
         if(magnitude>limit)return 0;
     }
-    f->dc+=mid;
+    f->dc+=center;
     return 1;
 }
 
+static float ac_rms(const uint32_t *p, unsigned ch, float mid, float begin, float end) {
+    float sum=0, squares=0;
+    for(unsigned i=(unsigned)begin;i+1U<HALF_PAIRS && i<end;++i) {
+        float l=begin>i?begin-i:0, h=end<i+1U?end-i:1;
+        float a=(float)code(p,i,ch)-mid, b=(float)code(p,i+1U,ch)-mid;
+        float w=h-l, q=0.5f*(h*h-l*l);
+        sum+=a*w+(b-a)*q;
+        squares+=a*a*w+(b*b-a*a)*q;
+    }
+    float mean=sum/(end-begin);
+    return sqrtf(fmaxf(0,squares/(end-begin)-mean*mean));
+}
 static void analyze(const uint32_t *p, unsigned ch) {
     Reading *r = &reading[ch];
     unsigned lo=4095, hi=0, n=0, armed=0;
     float first=0, last=0, st=0, skt=0, worst=0, prev_edge=0;
-    float period=0, mean=0, rms=0, span;
+    float period=0, rms=0, span=0;
     for (unsigned i=0;i<HALF_PAIRS;++i) {
         unsigned x=code(p,i,ch);
         if(x<lo)lo=x;
@@ -164,6 +194,7 @@ static void analyze(const uint32_t *p, unsigned ch) {
     }
     memset(r,0,sizeof(*r));
     sine_fit_used[ch]=0;
+    measurement_cycles[ch]=0;
     r->clipped = lo<=8U || hi>=4087U;
     float mid=0.5f*(hi+lo), band=(hi-lo)*0.15f;
     if(band<4)band=4;
@@ -196,23 +227,10 @@ static void analyze(const uint32_t *p, unsigned ch) {
         r->hz=(unsigned)(sample_hz/period+0.5f);
     }
     periods[ch]=period; origins[ch]=first;
-    /* Integrate x and x^2 over complete cycles with fractional endpoints. */
-    float begin=period>0?first:0, end=period>0?last:HALF_PAIRS-1U;
-    float sum=0, squares=0;
-    for(unsigned i=(unsigned)begin;i+1U<HALF_PAIRS && i<end;++i) {
-        float l=begin>i?begin-i:0, h=end<i+1U?end-i:1;
-        float a=(float)code(p,i,ch)-mid, b=(float)code(p,i+1U,ch)-mid;
-        float w=h-l, q=0.5f*(h*h-l*l);
-        sum+=a*w+(b-a)*q;
-        squares+=a*a*w+(b*b-a*a)*q;
-    }
-    mean=sum/(end-begin);
-    float variance=squares/(end-begin)-mean*mean;
-    if(variance<0)variance=0;
-    rms=sqrtf(variance); span=quantile_span(p,ch);
     if(period>0) {
         Sine fit;
-        if(!r->clipped && fit_sine(p,ch,mid,period,&fit)) {
+        measurement_cycles[ch]=(unsigned)((HALF_PAIRS-1U)/period);
+        if(!r->clipped && measurement_cycles[ch]>=SCOPE_MIN_CYCLES && fit_sine(p,ch,mid,period,&fit)) {
             float amp=sqrtf(fit.a*fit.a+fit.b*fit.b);
             span=2*amp; rms=amp*0.70710678118f;
             period=PI2/fit.omega;
@@ -225,7 +243,7 @@ static void analyze(const uint32_t *p, unsigned ch) {
             r->first_q8=(unsigned)(first*256+0.5f);
             sine_fit_used[ch]=1;
             for(unsigned bin=0;bin<PROFILE;++bin)
-                profile[ch][bin]=fit.dc+amp*sinf(PI2*bin/PROFILE);
+                profile[ch][bin]=fit.dc+amp*sine_q10(bin<<25)/1024.0f;
         } else {
             /* Phase averaging is for drawing only; VPP remains the order statistic. */
             unsigned cycles=(unsigned)((last-first)/period+0.5f);
@@ -242,11 +260,16 @@ static void analyze(const uint32_t *p, unsigned ch) {
             }
         }
     }
+    if(!sine_fit_used[ch]) {
+        span=quantile_span(p,ch);
+        rms=ac_rms(p,ch,mid,period>0?first:0,period>0?last:HALF_PAIRS-1U);
+    }
     float step=vdda_mv*(ch?GAIN2_PERMILLE:GAIN1_PERMILLE)/(4096.0f*1000.0f);
     r->pp_mv=(unsigned)(span*step+0.5f);
     r->rms_mv=(unsigned)(rms*step+0.5f);
 }
 void measure(const uint32_t *pairs) {
+    uint32_t start=HAL_GetTick();
     analyze(pairs,0); analyze(pairs,1);
     unsigned ref=periods[0]>0?0:1;
     if(auto_time && periods[ref]>0){
@@ -291,4 +314,5 @@ void measure(const uint32_t *pairs) {
         }
         for(unsigned col=width;col<PLOT_WIDTH;++col)trace[ch][col]=105;
     }
+    measurement_ms=HAL_GetTick()-start;
 }

@@ -159,7 +159,8 @@ int sample_rate(unsigned hz){
     __HAL_TIM_SET_AUTORELOAD(&htim3, ticks - 1U);
     __HAL_TIM_SET_COUNTER(&htim3, 0U);
     sample_hz = actual;
-    schedule_reference(HAL_GetTick());
+    /* Preserve the periodic deadline: two-second rate probes must not keep
+       postponing the now five-second reference update indefinitely. */
     start_external();
     return 1;
 }

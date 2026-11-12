@@ -1,13 +1,17 @@
 #include "system_app.h"
 #include <stdio.h>
 #include <string.h>
-/* One complete ASCII command in flight. Only the main loop writes TX state. */
-static uint8_t rx[256],tx[96];
+/* One command or one transparent waveform block in flight. */
+static uint8_t rx[256],tx[PLOT_WIDTH];
 static volatile uint8_t head,tail,overflow;
 static volatile unsigned txpos,txlen;
 static uint8_t frame[8],used;
 static unsigned page=255,row,dirty=1,plot,paint;
 static uint32_t nextframe,query,nextprobe;
+/* addt: 1=wait FE, 2=send payload, 3=wait FD, 4=completed, 5=cancelled. */
+static unsigned burst_state,burst_channel,burst_disabled,scope_restart;
+static uint32_t burst_deadline,frame_started,frame_due;
+volatile unsigned screen_frames,screen_frame_ms,screen_burst_errors;
 /* 示波器式 RUN/STOP：scope_hold=1 冻结画面；scope_clear 为待发送的曲线清零命令数。 */
 static uint8_t scope_hold,scope_clear,scope_auto=1;
 void screen_uart_irq(void){
@@ -28,6 +32,10 @@ static void send(const char *s){
     memcpy(tx,s,n);memset(tx+n,255,3);
     txpos=0;txlen=n+3;__DMB();USART1->CR1|=USART_CR1_TXEIE;
 }
+static void send_wave(unsigned ch) {
+    unsigned n=ch?PLOT_WIDTH2:PLOT_WIDTH;
+    memcpy(tx,trace[ch],n);txpos=0;txlen=n;__DMB();USART1->CR1|=USART_CR1_TXEIE;
+}
 void screen_init(void){USART1->CR1|=USART_CR1_RXNEIE;}
 void screen_invalidate(void){row=0;dirty=1;paint=0;nextframe=0;}
 /* page3 的两个按键：16=自动设置，17=停止。
@@ -39,7 +47,8 @@ void scope_key(unsigned id){
         scope_auto=1;
         measure_auto();
         nextprobe=0;
-        paint=0;plot=0;
+        if(burst_state)scope_restart=1;
+        else {paint=0;plot=0;}
         scope_clear=2;          /* 依次清除 s0(ID=1) 和 s1(ID=15) */
         sample_changed();       /* 丢掉停止期间的旧快照，重新等稳定窗口 */
     }else if(id==SCOPE_KEY_STOP){
@@ -51,7 +60,15 @@ static void receive(uint8_t b){
     if(used==sizeof(frame)){memmove(frame,frame+1,sizeof(frame)-1);--used;}
     frame[used++]=b;
     if(used<3 || memcmp(frame+used-3,"\xff\xff\xff",3))return;
-    if(used>=7 && frame[used-7]==0x65 && frame[used-6]<=4 && frame[used-4]==0){
+    if(used>=4 && frame[used-4]==0xFE && burst_state==1){
+        burst_state=2;
+    }else if(used>=4 && frame[used-4]==0xFD && burst_state==3){
+        burst_state=4;
+    }else if(used>=4 && burst_state==1 &&
+             (frame[used-4]==0 || frame[used-4]==2 || frame[used-4]==0x12 || frame[used-4]==0x1A)){
+        /* Older screen firmware may reject addt: retain the compatible ASCII path. */
+        burst_state=5;burst_disabled=1;++screen_burst_errors;
+    }else if(used>=7 && frame[used-7]==0x65 && frame[used-6]<=4 && frame[used-4]==0){
         unsigned p=frame[used-6]; page=p;settings_key(p,frame[used-5]);
     }else if(used>=5 && frame[used-5]==0x66 && frame[used-4]<=4){
         if(page!=frame[used-4]){page=frame[used-4];screen_invalidate();}
@@ -109,6 +126,30 @@ void screen_tick(void){
     if(overflow){__disable_irq();tail=head;overflow=0;__enable_irq();used=0;query=0;page=255;screen_invalidate();}
     while(tail!=head){uint8_t b=rx[tail];++tail;receive(b);}
     if(txlen)return;
+    if(burst_state){
+        if(burst_state==1 && (int32_t)(now-burst_deadline)>=0){
+            /* FE may be lost after the panel entered raw mode: satisfy its byte count
+               before attempting any ASCII recovery, otherwise it stays stuck. */
+            ++screen_burst_errors;burst_state=2;
+        }
+        if(burst_state==2){
+            send_wave(burst_channel);burst_state=3;burst_deadline=now+250;return;
+        }
+        if(burst_state==3 && (int32_t)(now-burst_deadline)>=0){
+            ++screen_burst_errors;burst_disabled=1;burst_state=5;
+            send(""); /* End a rejected raw block on a panel without addt support. */
+        }
+        if(burst_state==4){
+            if(++plot==10U){
+                paint=0;++screen_frames;screen_frame_ms=now-frame_started;
+            }
+            burst_state=0;
+        }else if(burst_state==5){
+            burst_state=0;plot=8; /* Restart this frame through ordinary add commands. */
+        }else return;
+        if(scope_restart){paint=0;plot=0;scope_restart=0;}
+        return;
+    }
     if(page==3 && scope_clear){
         send(scope_clear==2?"cle 1,0":"cle 15,0");--scope_clear;return;
     }
@@ -123,6 +164,7 @@ void screen_tick(void){
     if(page!=3){scope_clear=0;return;}
     if(!paint){
         if(scope_hold)return;       /* STOP：不再取新样本，画面停在最后一帧 */
+        if((int32_t)(now-frame_due)<0)return;
         /* Periodic wideband acquisition escapes aliases after a frequency jump. */
         if(scope_auto && (!nextprobe || (int32_t)(now-nextprobe)>=0)){
             nextprobe=now+SCOPE_PROBE_MS;
@@ -132,20 +174,28 @@ void screen_tick(void){
         measure(p);
         if(scope_auto){
             unsigned hz=reading[0].hz?reading[0].hz:reading[1].hz;
-            /* ~180 samples/period leaves room for trigger + four full cycles. */
-            unsigned target=hz>FS_MAX_HZ/180U?FS_MAX_HZ:hz*180U;
+            /* Measurement spans ~16 cycles; the drawing timebase is independent. */
+            unsigned target=hz>FS_MAX_HZ/SCOPE_SAMPLES_PER_PERIOD?FS_MAX_HZ:hz*SCOPE_SAMPLES_PER_PERIOD;
             if(hz && sample_rate(target))return;
             /* Search down for slow inputs, then retry at maximum to reject aliasing. */
-            if(!hz)sample_rate(sample_hz>FS_MIN_HZ?sample_hz/4U:FS_MAX_HZ);
+            if(!hz && sample_hz>FS_MIN_HZ){sample_rate(sample_hz/4U);return;}
+            /* Short wideband probe frames are for rate selection, not voltage display. */
+            if(hz && measurement_cycles[reading[0].hz?0:1]<SCOPE_MIN_CYCLES)return;
         }
-        paint=1;plot=0;
+        paint=1;plot=0;frame_started=now;frame_due=now+SCOPE_FRAME_MS;
     }
     if(plot<8)meter(plot);
+    else if(!burst_disabled){
+        char cmd[32];burst_channel=plot-8U;
+        snprintf(cmd,sizeof(cmd),"addt %u,0,%u",burst_channel?15:1,burst_channel?PLOT_WIDTH2:PLOT_WIDTH);
+        send(cmd);burst_state=1;burst_deadline=now+250;
+        return; /* plot advances only after the matching FD acknowledgement. */
+    }
     else{
         unsigned i=(plot-8)/2,ch=(plot-8)%2;char cmd[32];
         if(!ch || i<PLOT_WIDTH2){
             snprintf(cmd,sizeof(cmd),"add %u,0,%u",ch?15:1,trace[ch][i]);send(cmd);
         }
     }
-    if(++plot==8+2*PLOT_WIDTH)paint=0;
+    if(++plot==8+2*PLOT_WIDTH){paint=0;++screen_frames;screen_frame_ms=now-frame_started;}
 }

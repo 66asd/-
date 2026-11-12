@@ -142,19 +142,19 @@ for name in hal_names:
 put('uwTick',0);put('sample_hz',600000);invoke('sample_start')
 assert get('vdda_mv')==3020 and mock['writes']==4 and mock['running']
 assert read32(CAL)==0x56445231 and read32(CAL+4)==64*1630
-put('uwTick',999);events=len(mock['events']);invoke('sample_tick');assert len(mock['events'])==events
-mock['code']=1492;put('uwTick',1000);invoke('sample_tick')
+put('uwTick',4999);events=len(mock['events']);invoke('sample_tick');assert len(mock['events'])==events
+mock['code']=1492;put('uwTick',5000);invoke('sample_tick')
 assert abs(get('vdda_mv')-3300)<=1 and mock['writes']==4 and mock['running']
 assert get('reference_updates')==1
-prior=get('vdda_mv');mock['timeout']=True;put('uwTick',2000);invoke('sample_tick')
+prior=get('vdda_mv');mock['timeout']=True;put('uwTick',10000);invoke('sample_tick')
 assert get('vdda_mv')==prior and get('reference_errors')==1 and mock['running']
-mock['timeout']=False;mock['code']=0;put('uwTick',3000);invoke('sample_tick')
+mock['timeout']=False;mock['code']=0;put('uwTick',15000);invoke('sample_tick')
 assert get('vdda_mv')==prior and get('reference_errors')==2 and mock['running']
 mock['code']=1492;mock['running']=False;mock['dma']=False
 invoke('sample_start') # Reboot uses stored calibration; no re-anchoring to3020.
 assert abs(get('vdda_mv')-3300)<=1 and mock['writes']==4
 assert invoke('sample_rate',1)==1 and get('sample_hz')==2000 and read32(TIM3+44)==35999
-assert get('reference_next')==get('uwTick')+2048,'slow frames starved by reference updates'
+assert get('reference_next')==get('uwTick')+5000,'slow frames starved by reference updates'
 assert invoke('sample_rate',9999999)==1 and get('sample_hz')==600000 and read32(TIM3+44)==119
 # The first two post-switch records are discarded, never spliced into an old frame.
 for index,(cb,left) in enumerate([('HAL_ADC_ConvHalfCpltCallback',1024),('HAL_ADC_ConvCpltCallback',2048),('HAL_ADC_ConvHalfCpltCallback',1024)]):
@@ -167,20 +167,32 @@ u.mem_write(symbols['scope_hold'],b'\0');write32(symbols['txlen'],0)
 u.mem_write(symbols['scope_clear'],b'\0');u.mem_write(symbols['scope_auto'],b'\1')
 write32(symbols['query'],6000);write32(symbols['nextprobe'],4999)
 invoke('screen_tick');assert get('sample_hz')==600000
-# Exercise the whole main-loop path over eight simulated seconds, across VREF
+# Exercise the whole main-loop path over sixteen simulated seconds, across VREF
 # pauses and a 1kHz -> 50kHz input jump. UART and DMA registers are modelled;
 # screen_tick, sample_tick, callbacks, parser and waveform serialization are real ARM.
 mock['running']=False;mock['dma']=False;mock['code']=1630;put('uwTick',6000)
 invoke('sample_start');invoke('scope_key',16)
-write32(symbols['page'],3);write32(symbols['query'],20000)
+write32(symbols['page'],3);write32(symbols['query'],30000)
 USART=0x40013800;write32(USART,0x80)
-uart=bytearray();screen_frames=0;seen_hz=[];updates_before=get('reference_updates')
-for now in range(6000,14000,2):
+uart=bytearray();seen_hz=[];early_vpp=[];early_cycles=[];updates_before=get('reference_updates')
+command=bytearray();commands=[];payloads=[];raw_remaining=0;raw=bytearray();acks=[]
+restarted_mid_payload=False;hold_count=None
+for now in range(6000,22000,2):
     put('uwTick',now)
+    for due, packet in list(acks):
+        if due<=now:
+            for byte in packet:invoke('receive',byte)
+            acks.remove((due,packet))
+    if now==17000:invoke('scope_key',17)
+    if now==17200:hold_count=get('screen_frames')
+    if now==17398:assert get('screen_frames')==hold_count,'STOP did not freeze'
+    if now==17400:invoke('scope_key',16)
+    if not restarted_mid_payload and now>6600 and get('burst_state')==3 and get('txlen'):
+        invoke('scope_key',16);restarted_mid_payload=True
     if mock['running']:
         fs=get('sample_hz');before=mock['produced'];after=before+fs*2/1000
         mock['produced']=after
-        f=1000 if now<10000 else 50000
+        f=1000 if now<14000 else 50000
         basis=int(after)//2048*2048
         times=(np.arange(2048)+basis)/fs
         a=np.rint(2048+500*4096/3020*np.sin(2*np.pi*f*times+0.07)).astype(np.uint32)
@@ -190,18 +202,71 @@ for now in range(6000,14000,2):
             invoke('HAL_ADC_ConvHalfCpltCallback' if boundary%2 else 'HAL_ADC_ConvCpltCallback',symbols['hadc1'])
         write32(DMA+12,2048-int(after)%2048)
     invoke('sample_tick')
-    oldplot=get('plot');invoke('screen_tick')
-    if oldplot==489 and get('plot')==490:
-        screen_frames+=1;seen_hz.append(get('reading'))
-    while get('txlen'):
+    oldframes=get('screen_frames');invoke('screen_tick')
+    if get('screen_frames')>oldframes:
+        seen_hz.append(get('reading'))
+        if now<14000:
+            early_vpp.append(read32(symbols['reading']+8))
+            early_cycles.append(get('measurement_cycles'))
+    # The UART gets a real 115200-baud byte budget, not an instantaneous flush.
+    budget=23
+    while get('txlen') and budget:
         oldpos=get('txpos');invoke('screen_uart_irq')
-        if get('txpos')>oldpos:uart.append(read32(USART+4)&255)
-assert screen_frames>=4 and any(abs(h-1000)<10 for h in seen_hz) and abs(seen_hz[-1]-50000)<500,seen_hz
-assert uart.count(b'add 1,0,')>=4*241 and uart.count(b'add 15,0,')>=4*238
+        if get('txpos')<=oldpos:continue
+        budget-=1;byte=read32(USART+4)&255;uart.append(byte)
+        if raw_remaining:
+            raw.append(byte);raw_remaining-=1
+            if not raw_remaining:
+                assert min(raw)>=17 and max(raw)<=193
+                payloads.append((channel,bytes(raw)));raw.clear()
+                acks.append((now+2,b'\xfd\xff\xff\xff'))
+        else:
+            command.append(byte)
+            if command.endswith(b'\xff\xff\xff'):
+                cmd=bytes(command[:-3]);command.clear();commands.append(cmd)
+                if cmd.startswith(b'addt '):
+                    channel,zero,raw_remaining=map(int,cmd[5:].split(b','))
+                    assert zero==0 and (channel,raw_remaining) in [(1,241),(15,238)],cmd
+                    acks.append((now+6,b'\xfe\xff\xff\xff'))
+                # Successful ASCII commands can still return 01 while FE is pending.
+                acks.append((now+2,b'\x01\xff\xff\xff'))
+screen_frames=get('screen_frames')
+assert screen_frames>=70 and any(abs(h-1000)<10 for h in seen_hz) and abs(seen_hz[-1]-50000)<500,seen_hz
+assert len(payloads)>=2*screen_frames and not any(c.startswith(b'add ') for c in commands)
+assert restarted_mid_payload and get('screen_burst_errors')==0
+assert early_cycles and min(early_cycles)>=4,early_cycles
+assert min(early_vpp)>=997 and max(early_vpp)<=1003,early_vpp
 assert get('reference_updates')-updates_before>=3
+# Recover from missing transparent-mode acknowledgements without leaving the panel
+# permanently waiting for raw bytes. Also exercise the older-panel ASCII fallback.
+put('uwTick',23000);write32(symbols['txlen'],0);write32(symbols['paint'],1)
+write32(symbols['page'],3);write32(symbols['query'],30000)
+write32(symbols['plot'],8);write32(symbols['burst_channel'],0)
+write32(symbols['burst_state'],1);write32(symbols['burst_deadline'],22999)
+invoke('screen_tick')
+assert get('burst_state')==3 and get('txlen')==241,'lost FE did not complete raw byte count'
+sent=bytearray()
+while get('txlen'):
+    pos=get('txpos');invoke('screen_uart_irq')
+    if get('txpos')>pos:sent.append(read32(USART+4)&255)
+assert sent==bytes(u.mem_read(symbols['trace'],241))
+for byte in b'\xfd\xff\xff\xff':invoke('receive',byte)
+invoke('screen_tick');assert get('burst_state')==0 and get('plot')==9
+write32(symbols['burst_state'],3);write32(symbols['burst_deadline'],22999)
+invoke('screen_tick')
+assert get('burst_disabled') and get('plot')==8 and get('txlen')==3
+while get('txlen'):invoke('screen_uart_irq')
+invoke('screen_tick')
+assert bytes(u.mem_read(symbols['tx'],get('txlen'))).startswith(b'add 1,0,'),'ASCII fallback failed'
 result={'sine_frames':frames,'max_relative_error':dict(zip(['frequency','AC_RMS','VPP'],worst.tolist())),'checks':['300Hz-100kHz sine','square/triangle','DC/clipping','held timebase and AUTO','VREF calibrated ratio and invalid codes','startup calibration persisted once','scheduled VREF stop/restore ordering','reference timeout and bad code recovery','timer divider bounds','DMA transition frame rejection','alias escape probe']}
-result['checks']+=['real HAL post-calibration ADON guard','continuous DMA-to-UART output across VREF pauses']
-result['stream_test']={'screen_frames':screen_frames,'frame_frequencies':seen_hz,'uart_bytes':len(uart)}
+result['checks']+=['real HAL post-calibration ADON guard','continuous DMA-to-UART output across VREF pauses',
+                  '115200-baud addt FE/FD transport and exact byte counts',
+                  'STOP and AUTO during raw transfer','no short-probe VPP publication',
+                  'lost FE/FD recovery and ASCII fallback','five-second VREF deadline survives rate probes']
+result['stream_test']={'screen_frames':screen_frames,'first_and_last_hz':[seen_hz[0],seen_hz[-1]],
+                       'uart_bytes':len(uart),'raw_blocks':len(payloads),
+                       '1kHz_vpp_range_mv':[min(early_vpp),max(early_vpp)],
+                       '1kHz_window_cycles':[min(early_cycles),max(early_cycles)]}
 print(json.dumps(result,indent=2))
 (BUILD/'results.json').write_text(json.dumps(result,indent=2))
 
