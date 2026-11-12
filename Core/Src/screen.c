@@ -9,7 +9,7 @@ static uint8_t frame[8],used;
 static unsigned page=255,row,dirty=1,plot,paint;
 static uint32_t nextframe,query;
 /* 示波器式 RUN/STOP：scope_hold=1 冻结画面；scope_clear 为待发送的曲线清零命令数。 */
-static uint8_t scope_hold,scope_clear;
+static uint8_t scope_hold,scope_clear,scope_auto=1;
 void screen_uart_irq(void){
     uint32_t sr=USART1->SR;
     if(sr&(USART_SR_RXNE|USART_SR_ORE|USART_SR_NE|USART_SR_FE)){
@@ -30,16 +30,17 @@ static void send(const char *s){
 }
 void screen_init(void){USART1->CR1|=USART_CR1_RXNEIE;}
 void screen_invalidate(void){row=0;dirty=1;paint=0;nextframe=0;}
-/* page3 的两个按键：16/18=自动设置，17/19=停止。
+/* page3 的两个按键：16=自动设置，17=停止。
    自动设置恢复采集、清掉冻结的旧曲线，再按 S1 的 3~5 个周期重绘；
    停止只停住新帧，当前这一帧画完，避免屏上留下半条曲线。 */
 void scope_key(unsigned id){
-    if(id==SCOPE_KEY_AUTO || id==SCOPE_KEY_AUTO+2U){
+    if(id==SCOPE_KEY_AUTO){
         scope_hold=0;
+        scope_auto=1;
         paint=0;plot=0;
-        scope_clear=2;          /* 依次清除 s0(ID=1) 和 s1(ID=17) */
+        scope_clear=2;          /* 依次清除 s0(ID=1) 和 s1(ID=15) */
         sample_changed();       /* 丢掉停止期间的旧快照，重新等稳定窗口 */
-    }else if(id==SCOPE_KEY_STOP || id==SCOPE_KEY_STOP+2U){
+    }else if(id==SCOPE_KEY_STOP){
         scope_hold=1;
     }
 }
@@ -83,27 +84,17 @@ static void controls(void){
     if(++row==8){row=0;dirty=0;}
 }
 static void meter(unsigned index){
-    static const char *const names[]={"t1","t3","t5","t7","t9","t11","t13"};
+    static const char *const names[]={"t1","t3","t5","t7","t9","t11"};
     Reading *r=reading+(index>=3);char v[24];
+    /* New HMI has six measurement fields; t13 (phase) no longer exists. */
+    if(index==6){textcmd("t0",reading[0].clipped ? "CLIP" : "S1 Hz");return;}
     if(index==7){
         /* The frequency heading also carries S2 input quality. Measurement
            fields keep reporting the actual ADC waveform, even at a rail. */
         textcmd("t6",reading[1].clipped ? "CLIP" : "S2 Hz");
         return;
     }
-    if(index==6){
-        Reading *a=reading,*b=reading+1;
-        unsigned diff=a->hz>b->hz?a->hz-b->hz:b->hz-a->hz;
-        if(!a->hz || !b->hz)strcpy(v,"NO Hz");
-        else if(diff*200>a->hz)strcpy(v,"DIFF");
-        else{
-            int lag=(int)a->first_q8-(int)b->first_q8;
-            int angle=lag*360/(int)a->period_q8%360;
-            if(angle>180)angle-=360;
-            if(angle< -180)angle+=360;
-            snprintf(v,sizeof(v),"%dd",angle);
-        }
-    }else if(index%3==0){
+    if(index%3==0){
         if(r->hz)snprintf(v,sizeof(v),"%uHz",r->hz);else strcpy(v,"--");
     }else{
         unsigned m=index%3==1?r->rms_mv:r->pp_mv;
@@ -117,7 +108,7 @@ void screen_tick(void){
     while(tail!=head){uint8_t b=rx[tail];++tail;receive(b);}
     if(txlen)return;
     if(page==3 && scope_clear){
-        send(scope_clear==2?"cle 1,0":"cle 17,0");--scope_clear;return;
+        send(scope_clear==2?"cle 1,0":"cle 15,0");--scope_clear;return;
     }
     if(!query || (int32_t)(now-query)>=0){send("sendme");query=now+500;return;}
     if(page==2||page==4){
@@ -131,12 +122,23 @@ void screen_tick(void){
     if(!paint){
         if(scope_hold)return;       /* STOP：不再取新样本，画面停在最后一帧 */
         const uint32_t *p=sample_take();if(!p || !span_ready(p))return;
-        measure(p);paint=1;plot=0;
+        measure(p);
+        if(scope_auto){
+            unsigned hz=reading[0].hz?reading[0].hz:reading[1].hz;
+            /* ~180 samples/period leaves room for trigger + four full cycles. */
+            unsigned target=hz>FS_MAX_HZ/180U?FS_MAX_HZ:hz*180U;
+            if(hz && sample_rate(target))return;
+            /* Search down for slow inputs, then retry at maximum to reject aliasing. */
+            if(!hz)sample_rate(sample_hz>FS_MIN_HZ?sample_hz/4U:FS_MAX_HZ);
+        }
+        paint=1;plot=0;
     }
     if(plot<8)meter(plot);
     else{
         unsigned i=(plot-8)/2,ch=(plot-8)%2;char cmd[32];
-        snprintf(cmd,sizeof(cmd),"add %u,0,%u",ch?17:1,trace[ch][i]);send(cmd);
+        if(!ch || i<PLOT_WIDTH2){
+            snprintf(cmd,sizeof(cmd),"add %u,0,%u",ch?15:1,trace[ch][i]);send(cmd);
+        }
     }
     if(++plot==8+2*PLOT_WIDTH)paint=0;
 }

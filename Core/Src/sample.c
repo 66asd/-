@@ -12,6 +12,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *a){if(a==&hadc1) finished(1);}
 void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *a){(void)a;check(HAL_ERROR);}
 #define REFERENCE_SAMPLES 64U
 unsigned vdda_mv;
+unsigned sample_hz = FS_HZ;
 static HAL_StatusTypeDef measure_reference(uint32_t *sum)
 {
     ADC_ChannelConfTypeDef ref = {0}; /* 临时读取内部参考的通道配置，不覆盖外部信号的长期配置。 */
@@ -61,12 +62,36 @@ void sample_start(void) {
     SET_BIT(ADC1->CR2, ADC_CR2_TSVREFE);
     HAL_Delay(1);
     check(measure_reference(&sum));
-    vdda_mv = (1200U * 4096U * REFERENCE_SAMPLES + sum / 2) / sum;
+    vdda_mv = ADC_VDDA_CAL_MV ? ADC_VDDA_CAL_MV :
+        (ADC_VREFINT_CAL_MV * 4096U * REFERENCE_SAMPLES + sum / 2) / sum;
     check(HAL_ADC_Start(&hadc2));
     check(HAL_ADCEx_MultiModeStart_DMA(&hadc1,(uint32_t*)dma,2*HALF_PAIRS));
     check(HAL_TIM_Base_Start(&htim3));
 }
 void sample_changed(void){reset_span();consumed=generation; discard=2;}
+int sample_rate(unsigned hz){
+    uint32_t clock = HAL_RCC_GetPCLK1Freq();
+    if ((RCC->CFGR & RCC_CFGR_PPRE1) != 0U) clock *= 2U;
+    if (hz < FS_MIN_HZ) hz = FS_MIN_HZ;
+    if (hz > FS_MAX_HZ) hz = FS_MAX_HZ;
+    uint32_t ticks = (clock + hz / 2U) / hz;
+    unsigned actual = (clock + ticks / 2U) / ticks;
+    if (actual > sample_hz * 9U / 10U && actual < sample_hz * 11U / 10U) return 0;
+    check(HAL_TIM_Base_Stop(&htim3));
+    check(HAL_ADCEx_MultiModeStop_DMA(&hadc1));
+    check(HAL_ADC_Stop(&hadc2));
+    ADC_MultiModeTypeDef mode = {0};
+    mode.Mode = ADC_DUALMODE_REGSIMULT;
+    check(HAL_ADCEx_MultiModeConfigChannel(&hadc1, &mode));
+    __HAL_TIM_SET_AUTORELOAD(&htim3, ticks - 1U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    sample_hz = actual;
+    check(HAL_ADC_Start(&hadc2));
+    check(HAL_ADCEx_MultiModeStart_DMA(&hadc1,(uint32_t*)dma,2*HALF_PAIRS));
+    sample_changed();
+    check(HAL_TIM_Base_Start(&htim3));
+    return 1;
+}
 static unsigned safe(unsigned h){
     uint32_t left=DMA1_Channel1->CNDTR;
     return left && (h==0 ? left<=HALF_PAIRS : left>HALF_PAIRS);

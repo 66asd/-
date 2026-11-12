@@ -3,12 +3,16 @@ Source source[2];
 static int clamp(int x,int lo,int hi){return x<lo?lo:x>hi?hi:x;}
 static void write_source(unsigned ch)
 {
+#if DDS_ENABLED
     const Source *s = &source[ch];
     uint32_t hz = (uint32_t)(s->hz + s->offset);
     if (ch == 0)
         check(AD9833_SetOutput(hz, s->phase, (AD9833_Wave)s->wave));
     else
         check(AD9959_SetCH0(hz, s->phase, s->percent));
+#else
+    (void)ch;
+#endif
 }
 
 static void apply(unsigned ch){
@@ -16,7 +20,7 @@ static void apply(unsigned ch){
     sample_changed(); screen_invalidate();
 }
 void settings_init(void){
-    check(AD9833_Init()); check(AD9959_Init());
+    if (DDS_ENABLED) { check(AD9833_Init()); check(AD9959_Init()); }
     for(unsigned i=0;i<2;i++){
         Source *s=source+i;
         s->hz=i?DEFAULT_F2:DEFAULT_F1; s->wave=i?0:1; s->percent=100;

@@ -4,5 +4,6 @@ MDK-ARM/Listings/
 MDK-ARM/*.uvguix.*
 MDK-ARM/*.uvoptx
 build/
+build-keil.log
 __pycache__/
 *.pyc

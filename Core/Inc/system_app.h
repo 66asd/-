@@ -13,6 +13,8 @@ static inline void check(HAL_StatusTypeDef status)
 void screen_uart_irq(void);
 void sample_start(void);
 void sample_changed(void);
+extern unsigned sample_hz;
+int sample_rate(unsigned hz);
 const uint32_t *sample_take(void);
 typedef struct {
     int hz, phase, percent, wave, increment, span, step, dwell, sweep, offset;

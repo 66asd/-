@@ -22,16 +22,22 @@
 #define DWELL_MIN 50
 #define DWELL_MAX 2000
 #define VDDA_MV 3300
+/* Set to a measured VDDA for absolute accuracy; zero uses calibrated VREFINT. */
+#define ADC_VDDA_CAL_MV 0U
+#define ADC_VREFINT_CAL_MV 1200U
+#define DDS_ENABLED 0
 /* ADC-pin mV to original mV, independently measured divider gains. */
 #define GAIN1_PERMILLE 1000
 #define GAIN2_PERMILLE 1000
-#define FS_HZ 100000UL
+#define FS_HZ 400000UL
+#define FS_MAX_HZ 400000UL
+#define FS_MIN_HZ 2000UL
 #define HALF_PAIRS 1024U
-#define PLOT_WIDTH 479U
+#define PLOT_WIDTH 241U
+#define PLOT_WIDTH2 238U
 #define DEFAULT_WINDOW 400U
-#define MAX_WINDOW 1000U   /* 300 Hz 时 4 周期会被截到 3 周期，保证仍在 3~5 内 */
 /* 示波器式自动时基：横轴约 4 个周期（要求 3~5 个）。 */
 #define SCOPE_CYCLES 4U
-/* HMI page3 两个按键的控件 ID：16=自动设置，17=停止（18/19 作为备用别名）。 */
+/* Verified in DualDDS2.HMI: b1=16, b2=17, s0=1, s1=15. */
 #define SCOPE_KEY_AUTO 16U
 #define SCOPE_KEY_STOP 17U
