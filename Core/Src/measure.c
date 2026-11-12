@@ -5,6 +5,8 @@
 #define PROFILE 128U
 Reading reading[2];
 uint8_t trace[2][PLOT_WIDTH];
+/* Debugger diagnostics: 1 only when this frame passes the sine model checks. */
+volatile unsigned sine_fit_used[2];
 static float profile[2][PROFILE];
 static float periods[2], origins[2];
 static float display_seconds;
@@ -26,6 +28,130 @@ void reset_span(void) { }
 /* Both channels now use the same coherent snapshot, never stale extrema. */
 int span_ready(const uint32_t *pairs) { (void)pairs; return 1; }
 
+/* Exact 12-bit order statistics, in two 6-bit histogram passes. The complete
+   multi-cycle record is used; discard 0.5% of samples at EACH end, not one peak.
+   Only 256 bytes of temporary counters, no sorting buffer or dynamic allocation. */
+static float quantile_span(const uint32_t *p, unsigned ch) {
+    uint16_t hist[2][64]={{0}};
+    unsigned rank[2]={HALF_PAIRS/200U,HALF_PAIRS-1U-HALF_PAIRS/200U};
+    unsigned base[2]={0}, value[2]={0};
+    for(unsigned i=0;i<HALF_PAIRS;++i)++hist[0][code(p,i,ch)>>6];
+    for(unsigned end=0;end<2U;++end) {
+        unsigned count=0;
+        for(unsigned bin=0;bin<64U;++bin) {
+            if(count+hist[0][bin]>rank[end]) {
+                base[end]=bin; rank[end]-=count; break;
+            }
+            count+=hist[0][bin];
+        }
+    }
+    memset(hist,0,sizeof(hist));
+    for(unsigned i=0;i<HALF_PAIRS;++i) {
+        unsigned x=code(p,i,ch);
+        for(unsigned end=0;end<2U;++end)
+            if((x>>6)==base[end])++hist[end][x&63U];
+    }
+    for(unsigned end=0;end<2U;++end) {
+        unsigned count=0;
+        for(unsigned bin=0;bin<64U;++bin) {
+            count+=hist[end][bin];
+            if(count>rank[end]) {value[end]=base[end]*64U+bin; break;}
+        }
+    }
+    return (float)(value[1]-value[0]);
+}
+
+/* Small pivoted normal-equation solve. Fixed storage, no heap or sample buffer. */
+static int solve(float m[4][5], unsigned n, float x[4]) {
+    for(unsigned col=0;col<n;++col) {
+        unsigned pivot=col;
+        for(unsigned row=col+1U;row<n;++row)
+            if(fabsf(m[row][col])>fabsf(m[pivot][col]))pivot=row;
+        if(fabsf(m[pivot][col])<0.001f)return 0;
+        for(unsigned k=col;k<=n;++k) {
+            float t=m[col][k]; m[col][k]=m[pivot][k]; m[pivot][k]=t;
+        }
+        float div=m[col][col];
+        for(unsigned k=col;k<=n;++k)m[col][k]/=div;
+        for(unsigned row=0;row<n;++row)if(row!=col) {
+            float factor=m[row][col];
+            for(unsigned k=col;k<=n;++k)m[row][k]-=factor*m[col][k];
+        }
+    }
+    for(unsigned i=0;i<n;++i)x[i]=m[i][n];
+    return 1;
+}
+static void rotate(float *s, float *c, float sn, float cs, unsigned i) {
+    float next=*s*cs+*c*sn;
+    *c=*c*cs-*s*sn; *s=next;
+    if((i&63U)==63U) {
+        /* Correct oscillator roundoff without per-sample trigonometry. */
+        float scale=1.5f-0.5f*((*s)*(*s)+(*c)*(*c));
+        *s*=scale; *c*=scale;
+    }
+}
+typedef struct { float a,b,dc,omega; } Sine;
+static int fit_sine(const uint32_t *p, unsigned ch, float mid, float period, Sine *f) {
+    const float center=(HALF_PAIRS-1U)*0.5f;
+    float sigma=4096, initial=PI2/period;
+    f->a=0; f->b=0; f->dc=0; f->omega=initial;
+    /* First solve DC/sin/cos. Then jointly refine frequency and amplitude.
+       All 1024 original samples participate; no phase-bin peak selection. */
+    for(unsigned pass=0;pass<4U;++pass) {
+        float m[4][5]={{0}}, dx[4]={0}, error=0;
+        unsigned n=pass?4U:3U;
+        float sn=sinf(f->omega), cs=cosf(f->omega);
+        float s=sinf(-center*f->omega), c=cosf(-center*f->omega);
+        float cutoff=fmaxf(2.0f,3.0f*sigma);
+        for(unsigned i=0;i<HALF_PAIRS;++i) {
+            float e=(float)code(p,i,ch)-mid-f->dc-f->a*s-f->b*c;
+            float h[4]={s,c,1,((float)i-center)/HALF_PAIRS*(f->a*c-f->b*s)};
+            /* Huber weights suppress isolated interference, not real amplitude steps. */
+            float weight=fabsf(e)>cutoff?cutoff/fabsf(e):1;
+            for(unsigned j=0;j<n;++j) {
+                for(unsigned k=0;k<n;++k)m[j][k]+=weight*h[j]*h[k];
+                m[j][n]+=weight*h[j]*e;
+            }
+            error+=weight*e*e;
+            rotate(&s,&c,sn,cs,i);
+        }
+        if(!solve(m,n,dx))return 0;
+        float scale=pass && fabsf(dx[3])>0.75f?0.75f/fabsf(dx[3]):1;
+        f->a+=scale*dx[0]; f->b+=scale*dx[1]; f->dc+=scale*dx[2];
+        if(pass)f->omega+=scale*dx[3]/HALF_PAIRS;
+        sigma=sqrtf(error/HALF_PAIRS);
+    }
+    if(f->omega<=0 || fabsf(f->omega/initial-1)>0.02f)return 0;
+    float amp=sqrtf(f->a*f->a+f->b*f->b), error=0, harmonic[4][2]={{0}};
+    if(amp<12)return 0;
+    float sn=sinf(f->omega), cs=cosf(f->omega);
+    float s=sinf(-center*f->omega), c=cosf(-center*f->omega);
+    float cutoff=fmaxf(2.0f,3.0f*sigma);
+    for(unsigned i=0;i<HALF_PAIRS;++i) {
+        float e=(float)code(p,i,ch)-mid-f->dc-f->a*s-f->b*c;
+        error+=e*e;
+        /* A noisy sine is acceptable; coherent 2nd..5th harmonics are not noise.
+           Clip only this diagnostic's residual so a few spikes cannot mimic THD. */
+        float residual=fmaxf(-cutoff,fminf(cutoff,e)), hs=s, hc=c;
+        for(unsigned h=0;h<4U;++h) {
+            float next=hs*c+hc*s; hc=hc*c-hs*s; hs=next;
+            harmonic[h][0]+=residual*hs; harmonic[h][1]+=residual*hc;
+        }
+        rotate(&s,&c,sn,cs,i);
+    }
+    if(error>HALF_PAIRS*amp*amp*0.01f)return 0;
+    /* Include the finite-record noise floor instead of rejecting noisy sine frames. */
+    float limit=0.003f*amp+4*sigma*sqrtf(2.0f/HALF_PAIRS);
+    for(unsigned h=0;h<4U;++h) {
+        /* Harmonics at/above Nyquist cannot be distinguished from their aliases. */
+        if((h+2U)*f->omega>=PI2*0.5f)continue;
+        float magnitude=2*sqrtf(harmonic[h][0]*harmonic[h][0]+harmonic[h][1]*harmonic[h][1])/HALF_PAIRS;
+        if(magnitude>limit)return 0;
+    }
+    f->dc+=mid;
+    return 1;
+}
+
 static void analyze(const uint32_t *p, unsigned ch) {
     Reading *r = &reading[ch];
     unsigned lo=4095, hi=0, n=0, armed=0;
@@ -37,6 +163,7 @@ static void analyze(const uint32_t *p, unsigned ch) {
         if(x>hi)hi=x;
     }
     memset(r,0,sizeof(*r));
+    sine_fit_used[ch]=0;
     r->clipped = lo<=8U || hi>=4087U;
     float mid=0.5f*(hi+lo), band=(hi-lo)*0.15f;
     if(band<4)band=4;
@@ -82,55 +209,36 @@ static void analyze(const uint32_t *p, unsigned ch) {
     mean=sum/(end-begin);
     float variance=squares/(end-begin)-mean*mean;
     if(variance<0)variance=0;
-    rms=sqrtf(variance); span=(float)(hi-lo);
+    rms=sqrtf(variance); span=quantile_span(p,ch);
     if(period>0) {
-        unsigned cycles=(unsigned)((last-first)/period+0.5f);
-        if(cycles>64U)cycles=64U;
-        float low=4095, high=0;
-        for(unsigned bin=0;bin<PROFILE;++bin) {
-            float total=0; unsigned count=0;
-            for(unsigned cy=0;cy<cycles;++cy) {
-                float pos=first+period*(cy+bin/(float)PROFILE);
-                if(pos>=HALF_PAIRS-2U)break;
-                total+=interp(p,pos,ch); ++count;
-            }
-            float v=count?total/count:mid;
-            /* Cubic interpolation must not invent overshoot on square edges. */
-            if(v<lo)v=(float)lo;
-            if(v>hi)v=(float)hi;
-            profile[ch][bin]=v;
-            if(v<low)low=v;
-            if(v>high)high=v;
-        }
-        span=high-low;
-        /* Fit DC+sin+cos only when residual confirms a clean sine. No DDS assumption.
-           General waveforms retain the phase-averaged peak span and true AC RMS. */
-        float ss=0, cc=0, sc=0, sy=0, cy=0, s=0, c=0, yy=0, ysum=0;
-        unsigned count=0;
-        float omega=PI2/period, sn=sinf(omega), cs=cosf(omega);
-        float snv=sinf(omega*(ceilf(first)-first)), csv=cosf(omega*(ceilf(first)-first));
-        for(unsigned i=(unsigned)ceilf(first);i<=last && i<HALF_PAIRS;++i) {
-            float y=(float)code(p,i,ch)-mid;
-            ss+=snv*snv; cc+=csv*csv; sc+=snv*csv;
-            sy+=snv*y; cy+=csv*y; s+=snv; c+=csv; yy+=y*y; ysum+=y; ++count;
-            float next=snv*cs+csv*sn;
-            csv=csv*cs-snv*sn; snv=next;
-        }
-        float m=ysum/count;
-        ss-=s*s/count; cc-=c*c/count; sc-=s*c/count;
-        sy-=s*m; cy-=c*m; yy-=ysum*m;
-        float det=ss*cc-sc*sc;
-        if(det>1 && yy>1 && !r->clipped && period>=5.9f) {
-            float a=(sy*cc-cy*sc)/det, b=(cy*ss-sy*sc)/det;
-            float residual=yy-a*sy-b*cy;
-            if(residual<yy*0.0004f) {
-                float amp=sqrtf(a*a+b*b);
-                span=2*amp; rms=amp*0.70710678118f;
-                float dc=mid+m-(a*s+b*c)/count;
-                for(unsigned bin=0;bin<PROFILE;++bin) {
-                    float angle=PI2*bin/PROFILE;
-                    profile[ch][bin]=dc+a*sinf(angle)+b*cosf(angle);
+        Sine fit;
+        if(!r->clipped && fit_sine(p,ch,mid,period,&fit)) {
+            float amp=sqrtf(fit.a*fit.a+fit.b*fit.b);
+            span=2*amp; rms=amp*0.70710678118f;
+            period=PI2/fit.omega;
+            /* Locate a fitted rising crossing to keep waveform and timebase coherent. */
+            first=(HALF_PAIRS-1U)*0.5f-atan2f(fit.b,fit.a)/fit.omega;
+            first-=floorf(first/period)*period;
+            periods[ch]=period; origins[ch]=first;
+            r->hz=(unsigned)(sample_hz/period+0.5f);
+            r->period_q8=(unsigned)(period*256+0.5f);
+            r->first_q8=(unsigned)(first*256+0.5f);
+            sine_fit_used[ch]=1;
+            for(unsigned bin=0;bin<PROFILE;++bin)
+                profile[ch][bin]=fit.dc+amp*sinf(PI2*bin/PROFILE);
+        } else {
+            /* Phase averaging is for drawing only; VPP remains the order statistic. */
+            unsigned cycles=(unsigned)((last-first)/period+0.5f);
+            if(cycles>64U)cycles=64U;
+            for(unsigned bin=0;bin<PROFILE;++bin) {
+                float total=0; unsigned count=0;
+                for(unsigned cy=0;cy<cycles;++cy) {
+                    float pos=first+period*(cy+bin/(float)PROFILE);
+                    if(pos>=HALF_PAIRS-2U)break;
+                    total+=interp(p,pos,ch); ++count;
                 }
+                /* Clamp drawing interpolation overshoot at sharp square edges. */
+                profile[ch][bin]=fmaxf((float)lo,fminf((float)hi,count?total/count:mid));
             }
         }
     }
