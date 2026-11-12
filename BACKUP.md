@@ -7,5 +7,8 @@ BACKUP.md, .gitignore, DualDDS2.HMI. Reviewed firmware and HMI sources; no secre
 Exclude vendor dependencies, binaries, IDE caches, build outputs and unrelated files.
 Change 0002 includes the user-requested root DualDDS2.HMI source asset. Other HMI
 copies remain excluded. The original HMI was closed before capture to release its lock.
+Change 0003 covers firmware/configuration, tests and documentation only. HMI is
+open and exclusively locked; it is neither edited nor included in this task's
+snapshot tree. Change 0002 retains the recoverable HMI source.
 No original Git history, branch or staged changes existed. Snapshot commits use
 project-local Codex <codex@local> service identity; global Git identity is unchanged.
