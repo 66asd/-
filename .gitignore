@@ -1,0 +1,10 @@
+MDK-ARM/DualDDS_SPI/
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+MDK-ARM/*.uvguix.*
+MDK-ARM/*.uvoptx
+build/
+build-keil.log
+*.tft
+__pycache__/
+*.pyc
