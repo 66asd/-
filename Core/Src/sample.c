@@ -119,6 +119,8 @@ static void schedule_reference(uint32_t now) {
 }
 void sample_start(void) {
     check(HAL_ADCEx_Calibration_Start(&hadc1)); check(HAL_ADCEx_Calibration_Start(&hadc2));
+    /* F1 calibration leaves ADON set; both ADCs must be off before changing DUALMOD. */
+    check(HAL_ADC_Stop(&hadc1)); check(HAL_ADC_Stop(&hadc2));
     uint32_t sum = 0;
     SET_BIT(ADC1->CR2, ADC_CR2_TSVREFE);
     HAL_Delay(1);

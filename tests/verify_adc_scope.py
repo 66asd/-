@@ -107,9 +107,13 @@ def hal(uc,addr,size,name):
     ret=0;mock['events'].append(name)
     if name=='Error_Handler':raise AssertionError('firmware Error_Handler')
     if name=='HAL_RCC_GetPCLK1Freq':ret=36000000
+    elif name in ['HAL_ADCEx_Calibration_Start','HAL_ADC_Start']:
+        # STM32F1 HAL calibration returns with ADON set; it is not a no-op.
+        adc=read32(a);write32(adc+8,read32(adc+8)|1)
     elif name=='HAL_TIM_Base_Stop':mock['running']=False
     elif name=='HAL_ADCEx_MultiModeStop_DMA':
         assert not mock['running'];mock['dma']=False;write32(ADC1+4,read32(ADC1+4)&~0xf0000)
+        for adc in [ADC1,ADC2]:write32(adc+8,read32(adc+8)&~1)
     elif name=='HAL_ADC_ConfigChannel':
         assert not mock['running'] and not mock['dma'],'reference disturbed running external ADC'
         channel,rank,sampling=struct.unpack('<3I',bytes(u.mem_read(b,12)))
@@ -119,21 +123,19 @@ def hal(uc,addr,size,name):
     elif name=='HAL_ADC_GetValue':
         mock['read']+=1
         ret=[100,4095][mock['read']-1] if mock['read']<=2 else mock['code']
-    elif name=='HAL_ADCEx_MultiModeConfigChannel':
-        assert not mock['running'] and not mock['dma']
-        mode=read32(b);assert mode==0x60000;write32(ADC1+4,mode)
     elif name=='HAL_ADCEx_MultiModeStart_DMA':
         assert not mock['running'];assert read32(ADC1+4)&0xf0000==0x60000
         assert c==2048;mock['dma']=True;write32(DMA+12,2048)
+        for adc in [ADC1,ADC2]:write32(adc+8,read32(adc+8)|1)
     elif name=='HAL_TIM_Base_Start':
         assert mock['dma'] and read32(ADC1+52)==0 and read32(ADC1+12)==0x12345
-        mock['running']=True
+        mock['running']=True;mock['produced']=0
     elif name=='HAL_FLASH_Program':
         assert not mock['running'] and not mock['dma'] and a==2
         assert CAL<=b<CAL+16 and read32(b)==0xffffffff
         write32(b,c);mock['writes']+=1
     uc.reg_write(UC_ARM_REG_R0,ret);uc.reg_write(UC_ARM_REG_PC,uc.reg_read(UC_ARM_REG_LR))
-hal_names=['HAL_ADCEx_Calibration_Start','HAL_Delay','HAL_ADC_Start','HAL_ADC_Stop','HAL_ADC_ConfigChannel','HAL_ADC_PollForConversion','HAL_ADC_GetValue','HAL_ADCEx_MultiModeConfigChannel','HAL_ADCEx_MultiModeStart_DMA','HAL_ADCEx_MultiModeStop_DMA','HAL_TIM_Base_Start','HAL_TIM_Base_Stop','HAL_FLASH_Unlock','HAL_FLASH_Lock','HAL_FLASH_Program','HAL_RCC_GetPCLK1Freq','Error_Handler']
+hal_names=['HAL_ADCEx_Calibration_Start','HAL_Delay','HAL_ADC_Start','HAL_ADC_ConfigChannel','HAL_ADC_PollForConversion','HAL_ADC_GetValue','HAL_ADCEx_MultiModeStart_DMA','HAL_ADCEx_MultiModeStop_DMA','HAL_TIM_Base_Start','HAL_TIM_Base_Stop','HAL_FLASH_Unlock','HAL_FLASH_Lock','HAL_FLASH_Program','HAL_RCC_GetPCLK1Freq','Error_Handler']
 for name in hal_names:
     address=symbols[name]&~1
     u.hook_add(UC_HOOK_CODE,hal,user_data=name,begin=address,end=address)
@@ -165,7 +167,41 @@ u.mem_write(symbols['scope_hold'],b'\0');write32(symbols['txlen'],0)
 u.mem_write(symbols['scope_clear'],b'\0');u.mem_write(symbols['scope_auto'],b'\1')
 write32(symbols['query'],6000);write32(symbols['nextprobe'],4999)
 invoke('screen_tick');assert get('sample_hz')==600000
+# Exercise the whole main-loop path over eight simulated seconds, across VREF
+# pauses and a 1kHz -> 50kHz input jump. UART and DMA registers are modelled;
+# screen_tick, sample_tick, callbacks, parser and waveform serialization are real ARM.
+mock['running']=False;mock['dma']=False;mock['code']=1630;put('uwTick',6000)
+invoke('sample_start');invoke('scope_key',16)
+write32(symbols['page'],3);write32(symbols['query'],20000)
+USART=0x40013800;write32(USART,0x80)
+uart=bytearray();screen_frames=0;seen_hz=[];updates_before=get('reference_updates')
+for now in range(6000,14000,2):
+    put('uwTick',now)
+    if mock['running']:
+        fs=get('sample_hz');before=mock['produced'];after=before+fs*2/1000
+        mock['produced']=after
+        f=1000 if now<10000 else 50000
+        basis=int(after)//2048*2048
+        times=(np.arange(2048)+basis)/fs
+        a=np.rint(2048+500*4096/3020*np.sin(2*np.pi*f*times+0.07)).astype(np.uint32)
+        b=np.rint(2048+500*4096/3020*np.sin(2*np.pi*f*times+0.8)).astype(np.uint32)
+        u.mem_write(symbols['dma'],(a|(b<<16)).astype('<u4').tobytes())
+        for boundary in range(int(before)//1024+1,int(after)//1024+1):
+            invoke('HAL_ADC_ConvHalfCpltCallback' if boundary%2 else 'HAL_ADC_ConvCpltCallback',symbols['hadc1'])
+        write32(DMA+12,2048-int(after)%2048)
+    invoke('sample_tick')
+    oldplot=get('plot');invoke('screen_tick')
+    if oldplot==489 and get('plot')==490:
+        screen_frames+=1;seen_hz.append(get('reading'))
+    while get('txlen'):
+        oldpos=get('txpos');invoke('screen_uart_irq')
+        if get('txpos')>oldpos:uart.append(read32(USART+4)&255)
+assert screen_frames>=4 and any(abs(h-1000)<10 for h in seen_hz) and abs(seen_hz[-1]-50000)<500,seen_hz
+assert uart.count(b'add 1,0,')>=4*241 and uart.count(b'add 15,0,')>=4*238
+assert get('reference_updates')-updates_before>=3
 result={'sine_frames':frames,'max_relative_error':dict(zip(['frequency','AC_RMS','VPP'],worst.tolist())),'checks':['300Hz-100kHz sine','square/triangle','DC/clipping','held timebase and AUTO','VREF calibrated ratio and invalid codes','startup calibration persisted once','scheduled VREF stop/restore ordering','reference timeout and bad code recovery','timer divider bounds','DMA transition frame rejection','alias escape probe']}
+result['checks']+=['real HAL post-calibration ADON guard','continuous DMA-to-UART output across VREF pauses']
+result['stream_test']={'screen_frames':screen_frames,'frame_frequencies':seen_hz,'uart_bytes':len(uart)}
 print(json.dumps(result,indent=2))
 (BUILD/'results.json').write_text(json.dumps(result,indent=2))
 
