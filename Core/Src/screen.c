@@ -110,14 +110,16 @@ static void meter(unsigned index){
     if(index==7){
         /* The frequency heading also carries S2 input quality. Measurement
            fields keep reporting the actual ADC waveform, even at a rail. */
-        textcmd("t6",reading[1].clipped ? "CLIP" : "S2 Hz");
+        textcmd("t6",SCOPE_REFERENCE_VIEW?"VDDA":reading[1].clipped ? "CLIP" : "S2 Hz");
         return;
     }
     if(index%3==0){
-        if(r->hz)snprintf(v,sizeof(v),"%uHz",r->hz);else strcpy(v,"--");
+        if(SCOPE_REFERENCE_VIEW && index==3)snprintf(v,sizeof(v),"%umV",measurement_vdda_mv);
+        else if(r->hz)snprintf(v,sizeof(v),"%uHz",r->hz);else strcpy(v,"--");
     }else{
         unsigned m=index%3==1?r->rms_mv:r->pp_mv;
-        snprintf(v,sizeof(v),"%umV",m);
+        if(index%3==2 && !vpp_ready[index>=3])strcpy(v,"...");
+        else snprintf(v,sizeof(v),"%umV",m);
     }
     textcmd(names[index],v);
 }
@@ -182,6 +184,7 @@ void screen_tick(void){
             /* Short wideband probe frames are for rate selection, not voltage display. */
             if(hz && measurement_cycles[reading[0].hz?0:1]<SCOPE_MIN_CYCLES)return;
         }
+        measure_publish();
         paint=1;plot=0;frame_started=now;frame_due=now+SCOPE_FRAME_MS;
     }
     if(plot<8)meter(plot);

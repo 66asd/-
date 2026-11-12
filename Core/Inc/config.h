@@ -46,6 +46,14 @@
 #define SCOPE_SAMPLES_PER_PERIOD 64U
 #define SCOPE_MIN_CYCLES 4U
 #define SCOPE_FRAME_MS 80U
+/* Statistical VPP window; these are sample counts and an uncertainty limit,
+   never a gain correction or a target voltage. */
+#define VPP_WINDOWS_MIN 16U
+#define VPP_WINDOWS_MAX 128U
+#define VPP_ERROR_FRACTION 0.002f
+/* PA0-only bench setup: show the actual conversion reference in the S2 Hz field.
+   Set 0 to restore the ordinary PA1 frequency display. */
+#define SCOPE_REFERENCE_VIEW 1U
 /* Verified in DualDDS2.HMI: b1=16, b2=17, s0=1, s1=15. */
 #define SCOPE_KEY_AUTO 16U
 #define SCOPE_KEY_STOP 17U

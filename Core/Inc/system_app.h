@@ -30,11 +30,15 @@ typedef struct {unsigned hz,rms_mv,pp_mv,first_q8,period_q8,clipped; } Reading;
 extern Reading reading[2];
 extern volatile unsigned sine_fit_used[2];
 extern volatile unsigned measurement_cycles[2], measurement_ms;
+/* method: 0=raw quantiles/no frequency, 1=sine, 2=harmonic model, 3=folded quantiles. */
+extern volatile unsigned measurement_method[2], measurement_vpp_q8[2], measurement_vdda_mv;
+extern volatile unsigned vpp_window_frames[2],vpp_window_cycles[2],vpp_ready[2],vpp_uncertainty_uv[2];
 extern uint8_t trace[2][PLOT_WIDTH];
 extern unsigned vdda_mv;
 void reset_span(void);
 int span_ready(const uint32_t *pairs);
 void measure(const uint32_t *pairs);
+void measure_publish(void);
 void measure_auto(void);
 void screen_init(void);
 void screen_tick(void);

@@ -38,11 +38,12 @@ def invoke(name,*args):
     return u.reg_read(UC_ARM_REG_R0)
 def put(name,value):u.mem_write(symbols[name],struct.pack('<I',value))
 def get(name):return struct.unpack('<I',bytes(u.mem_read(symbols[name],4)))[0]
-def run(a,b,fs,vdda=3020,auto=True):
+def run(a,b,fs,vdda=3020,auto=True,publish=False):
     p=np.rint(np.clip(a,0,4095)).astype(np.uint32) | (np.rint(np.clip(b,0,4095)).astype(np.uint32)<<16)
     u.mem_write(0x20010000,p.astype('<u4').tobytes());put('sample_hz',fs);put('vdda_mv',vdda)
     if auto:invoke('measure_auto')
     invoke('measure',0x20010000)
+    if publish:invoke('measure_publish')
     r=np.array(struct.unpack('<12I',bytes(u.mem_read(symbols['reading'],48)))).reshape(2,6)
     trace=np.frombuffer(bytes(u.mem_read(symbols['trace'],482)),dtype=np.uint8).reshape(2,241)
     assert trace.min()>=17 and trace.max()<=193
@@ -82,9 +83,10 @@ assert r[0,5] and not r[1,5]
 # Calibrated reference conversion uses the measured 3020mV anchor, not typical 1200mV.
 assert invoke('reference_voltage',64*1630,64*1630,3020)==3020
 assert abs(invoke('reference_voltage',64*1630,64*1492,3020)-3300)<=1
+assert invoke('reference_voltage',64*1630,64*1758,3020)==2800
 assert invoke('reference_voltage',64*1630,0,3020)==0
 assert invoke('reference_voltage',64*1630,64*100,3020)==0
-for voltage in [2700,3020,3300]:
+for voltage in [2700,2800,3020,3300]:
     a=2048+500*4096/voltage*np.sin(2*np.pi*40000*t/600000+0.3)
     r,_=run(a,a,600000,vdda=voltage)
     assert np.all(abs(r[:,2]-1000)<=3),(voltage,r)
@@ -146,13 +148,15 @@ put('uwTick',4999);events=len(mock['events']);invoke('sample_tick');assert len(m
 mock['code']=1492;put('uwTick',5000);invoke('sample_tick')
 assert abs(get('vdda_mv')-3300)<=1 and mock['writes']==4 and mock['running']
 assert get('reference_updates')==1
-prior=get('vdda_mv');mock['timeout']=True;put('uwTick',10000);invoke('sample_tick')
+mock['code']=1758;put('uwTick',10000);invoke('sample_tick')
+assert get('vdda_mv')==2800 and get('reference_updates')==2 and read32(CAL+8)==3020
+prior=get('vdda_mv');mock['timeout']=True;put('uwTick',15000);invoke('sample_tick')
 assert get('vdda_mv')==prior and get('reference_errors')==1 and mock['running']
-mock['timeout']=False;mock['code']=0;put('uwTick',15000);invoke('sample_tick')
+mock['timeout']=False;mock['code']=0;put('uwTick',20000);invoke('sample_tick')
 assert get('vdda_mv')==prior and get('reference_errors')==2 and mock['running']
-mock['code']=1492;mock['running']=False;mock['dma']=False
+mock['code']=1758;mock['running']=False;mock['dma']=False
 invoke('sample_start') # Reboot uses stored calibration; no re-anchoring to3020.
-assert abs(get('vdda_mv')-3300)<=1 and mock['writes']==4
+assert get('vdda_mv')==2800 and mock['writes']==4
 assert invoke('sample_rate',1)==1 and get('sample_hz')==2000 and read32(TIM3+44)==35999
 assert get('reference_next')==get('uwTick')+5000,'slow frames starved by reference updates'
 assert invoke('sample_rate',9999999)==1 and get('sample_hz')==600000 and read32(TIM3+44)==119
@@ -179,6 +183,8 @@ command=bytearray();commands=[];payloads=[];raw_remaining=0;raw=bytearray();acks
 restarted_mid_payload=False;hold_count=None
 for now in range(6000,22000,2):
     put('uwTick',now)
+    physical_mv=3020 if now<11000 else 2800
+    mock['code']=1630 if now<11000 else 1758
     for due, packet in list(acks):
         if due<=now:
             for byte in packet:invoke('receive',byte)
@@ -195,8 +201,8 @@ for now in range(6000,22000,2):
         f=1000 if now<14000 else 50000
         basis=int(after)//2048*2048
         times=(np.arange(2048)+basis)/fs
-        a=np.rint(2048+500*4096/3020*np.sin(2*np.pi*f*times+0.07)).astype(np.uint32)
-        b=np.rint(2048+500*4096/3020*np.sin(2*np.pi*f*times+0.8)).astype(np.uint32)
+        a=np.rint(2048+500*4096/physical_mv*np.sin(2*np.pi*f*times+0.07)).astype(np.uint32)
+        b=np.rint(2048+500*4096/physical_mv*np.sin(2*np.pi*f*times+0.8)).astype(np.uint32)
         u.mem_write(symbols['dma'],(a|(b<<16)).astype('<u4').tobytes())
         for boundary in range(int(before)//1024+1,int(after)//1024+1):
             invoke('HAL_ADC_ConvHalfCpltCallback' if boundary%2 else 'HAL_ADC_ConvCpltCallback',symbols['hadc1'])
@@ -237,6 +243,8 @@ assert restarted_mid_payload and get('screen_burst_errors')==0
 assert early_cycles and min(early_cycles)>=4,early_cycles
 assert min(early_vpp)>=997 and max(early_vpp)<=1003,early_vpp
 assert get('reference_updates')-updates_before>=3
+assert get('vdda_mv')==2800 and read32(CAL+8)==3020
+assert b't7.txt="2800mV"' in commands,'screen did not show the automatically updated reference'
 # Recover from missing transparent-mode acknowledgements without leaving the panel
 # permanently waiting for raw bytes. Also exercise the older-panel ASCII fallback.
 put('uwTick',23000);write32(symbols['txlen'],0);write32(symbols['paint'],1)
@@ -263,6 +271,7 @@ result['checks']+=['real HAL post-calibration ADON guard','continuous DMA-to-UAR
                   '115200-baud addt FE/FD transport and exact byte counts',
                   'STOP and AUTO during raw transfer','no short-probe VPP publication',
                   'lost FE/FD recovery and ASCII fallback','five-second VREF deadline survives rate probes']
+result['checks']+=['VDDA auto tracks 3020mV to 2800mV without changing initial calibration']
 result['stream_test']={'screen_frames':screen_frames,'first_and_last_hz':[seen_hz[0],seen_hz[-1]],
                        'uart_bytes':len(uart),'raw_blocks':len(payloads),
                        '1kHz_vpp_range_mv':[min(early_vpp),max(early_vpp)],
