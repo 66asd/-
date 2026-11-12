@@ -17,7 +17,8 @@ static uint32_t reference_cal_sum, reference_next;
 static unsigned reference_cal_mv;
 volatile uint32_t reference_errors, reference_store_errors, reference_updates;
 volatile uint32_t reference_sum;
-#define CAL_TAG 0x56445231UL
+volatile unsigned reference_calibration_revision,adc_sample_cycles_x2;
+#define CAL_TAG (0x56445230UL+ADC_CAL_REVISION)
 typedef struct { uint32_t tag, sum, mv, checksum; } ReferenceCalibration;
 static int reference_valid(uint32_t sum) {
     return sum >= REFERENCE_SAMPLES*1000U && sum <= REFERENCE_SAMPLES*2300U;
@@ -28,27 +29,32 @@ unsigned reference_voltage(uint32_t calibration_sum, uint32_t sum, unsigned cali
     return mv>=2400U && mv<=3600U ? mv : 0;
 }
 static void load_calibration(uint32_t sum) {
-    const ReferenceCalibration *saved=(const ReferenceCalibration *)ADC_CAL_ADDRESS;
-    if(saved->tag==CAL_TAG && reference_valid(saved->sum) &&
-       saved->mv>=2400U && saved->mv<=3600U &&
-       saved->checksum==(CAL_TAG ^ saved->sum ^ saved->mv)) {
+    const ReferenceCalibration *records=(const ReferenceCalibration *)ADC_CAL_ADDRESS;
+    const ReferenceCalibration *saved=0,*empty=0;
+    for(unsigned i=0;i<ADC_CAL_BYTES/sizeof(*records);++i) {
+        const ReferenceCalibration *r=records+i;
+        if(r->tag==CAL_TAG && reference_valid(r->sum) && r->mv>=2400U && r->mv<=3600U &&
+           r->checksum==(CAL_TAG^r->sum^r->mv))saved=r;
+        if(!empty && r->tag==0xFFFFFFFFUL && r->sum==0xFFFFFFFFUL &&
+           r->mv==0xFFFFFFFFUL && r->checksum==0xFFFFFFFFUL)empty=r;
+    }
+    reference_calibration_revision=ADC_CAL_REVISION;
+    if(saved) {
         reference_cal_sum=saved->sum; reference_cal_mv=saved->mv;
         return;
     }
     reference_cal_sum=sum;
     reference_cal_mv=ADC_VDDA_CAL_MV;
-    /* A nonblank unrecognized record is never erased automatically. */
-    for(unsigned i=0;i<sizeof(*saved)/4U;++i) {
-        if(((const uint32_t *)saved)[i]!=0xFFFFFFFFUL) {
-            ++reference_store_errors; return;
-        }
-    }
+    /* Append the explicitly selected calibration revision; old/partial/unknown
+       records remain recoverable. A full page is never erased automatically. */
+    if(!empty){++reference_store_errors;return;}
+    uint32_t address=(uint32_t)empty;
     if(HAL_FLASH_Unlock()!=HAL_OK){++reference_store_errors;return;}
-    HAL_StatusTypeDef status=HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,ADC_CAL_ADDRESS+4U,sum);
-    if(status==HAL_OK)status=HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,ADC_CAL_ADDRESS+8U,reference_cal_mv);
-    if(status==HAL_OK)status=HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,ADC_CAL_ADDRESS+12U,CAL_TAG^sum^reference_cal_mv);
+    HAL_StatusTypeDef status=HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,address+4U,sum);
+    if(status==HAL_OK)status=HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,address+8U,reference_cal_mv);
+    if(status==HAL_OK)status=HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,address+12U,CAL_TAG^sum^reference_cal_mv);
     /* Commit marker last: incomplete writes cannot become a valid calibration. */
-    if(status==HAL_OK)status=HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,ADC_CAL_ADDRESS,CAL_TAG);
+    if(status==HAL_OK)status=HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,address,CAL_TAG);
     if(HAL_FLASH_Lock()!=HAL_OK || status!=HAL_OK)++reference_store_errors;
 }
 static HAL_StatusTypeDef measure_reference(uint32_t *sum)
@@ -95,7 +101,19 @@ static HAL_StatusTypeDef measure_reference(uint32_t *sum)
 }
 
 
+static void external_sampling_time(void) {
+    static const uint16_t cycles_x2[]={3,15,27,57,83,111,143,479};
+    unsigned selected=0,available=2U*ADC_CLOCK_HZ/sample_hz;
+    /* Budget 12.5 conversion cycles plus four cycles of trigger margin. Longer
+       acquisition at low rates avoids gain loss with a resistive bias network. */
+    for(unsigned i=1;i<8U;++i)
+        if(cycles_x2[i]+25U+8U<=available)selected=i;
+    MODIFY_REG(ADC1->SMPR2,ADC_SMPR2_SMP0,selected);
+    MODIFY_REG(ADC2->SMPR2,ADC_SMPR2_SMP1,selected<<3U);
+    adc_sample_cycles_x2=cycles_x2[selected];
+}
 static void start_external(void) {
+    external_sampling_time();
     /* HAL's multimode stop clears DUALMOD; restore it on every restart. */
     ADC_MultiModeTypeDef mode = {0};
     mode.Mode = ADC_DUALMODE_REGSIMULT;

@@ -23,7 +23,12 @@
 #define DWELL_MAX 2000
 #define VDDA_MV 3300
 /* First calibration only: measured supply, persisted with its averaged VREF code. */
-#define ADC_VDDA_CAL_MV 3020U
+#define ADC_VDDA_CAL_MV 2800U
+/* Revision 2 is one new absolute calibration at the user-confirmed 2.80V supply.
+   Existing revision-1 records are retained; this does not calibrate to VPP. */
+#define ADC_CAL_REVISION 2U
+#define ADC_CAL_BYTES 1024U
+#define ADC_CLOCK_HZ 12000000UL /* PCLK2=72MHz, ADCPRE=6 in SystemClock_Config. */
 #define ADC_VREFINT_CAL_MV 1200U
 #define ADC_CAL_ADDRESS 0x0800FC00UL /* Reserved last 1KB of the 64KB C8 flash. */
 #define ADC_REFERENCE_MS 5000U

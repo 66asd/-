@@ -84,6 +84,7 @@ assert r[0,5] and not r[1,5]
 assert invoke('reference_voltage',64*1630,64*1630,3020)==3020
 assert abs(invoke('reference_voltage',64*1630,64*1492,3020)-3300)<=1
 assert invoke('reference_voltage',64*1630,64*1758,3020)==2800
+assert invoke('reference_voltage',64*1758,64*1630,2800)==3020
 assert invoke('reference_voltage',64*1630,0,3020)==0
 assert invoke('reference_voltage',64*1630,64*100,3020)==0
 for voltage in [2700,2800,3020,3300]:
@@ -103,7 +104,10 @@ for name,addr in [('hadc1',ADC1),('hadc2',ADC2),('htim3',TIM3)]:write32(symbols[
 write32(ADC1+8,0x180000);write32(ADC1+12,0x12345);write32(ADC1+52,0)
 write32(RCC+4,0x400);write32(TIM3+44,119)
 u.mem_write(CAL,b'\xff'*1024)
-mock={'running':False,'dma':False,'code':1630,'read':0,'timeout':False,'writes':0,'events':[]}
+# Keep the old 3.02V revision intact. New calibration appends into a fresh slot.
+old_cal=struct.pack('<4I',0x56445231,64*1630,3020,0x56445231^(64*1630)^3020)
+u.mem_write(CAL,old_cal)
+mock={'running':False,'dma':False,'code':1758,'read':0,'timeout':False,'writes':0,'events':[]}
 def hal(uc,addr,size,name):
     a=uc.reg_read(UC_ARM_REG_R0);b=uc.reg_read(UC_ARM_REG_R1);c=uc.reg_read(UC_ARM_REG_R2)
     ret=0;mock['events'].append(name)
@@ -134,7 +138,7 @@ def hal(uc,addr,size,name):
         mock['running']=True;mock['produced']=0
     elif name=='HAL_FLASH_Program':
         assert not mock['running'] and not mock['dma'] and a==2
-        assert CAL<=b<CAL+16 and read32(b)==0xffffffff
+        assert CAL+16<=b<CAL+1024 and read32(b)==0xffffffff
         write32(b,c);mock['writes']+=1
     uc.reg_write(UC_ARM_REG_R0,ret);uc.reg_write(UC_ARM_REG_PC,uc.reg_read(UC_ARM_REG_LR))
 hal_names=['HAL_ADCEx_Calibration_Start','HAL_Delay','HAL_ADC_Start','HAL_ADC_ConfigChannel','HAL_ADC_PollForConversion','HAL_ADC_GetValue','HAL_ADCEx_MultiModeStart_DMA','HAL_ADCEx_MultiModeStop_DMA','HAL_TIM_Base_Start','HAL_TIM_Base_Stop','HAL_FLASH_Unlock','HAL_FLASH_Lock','HAL_FLASH_Program','HAL_RCC_GetPCLK1Freq','Error_Handler']
@@ -142,8 +146,10 @@ for name in hal_names:
     address=symbols[name]&~1
     u.hook_add(UC_HOOK_CODE,hal,user_data=name,begin=address,end=address)
 put('uwTick',0);put('sample_hz',600000);invoke('sample_start')
-assert get('vdda_mv')==3020 and mock['writes']==4 and mock['running']
-assert read32(CAL)==0x56445231 and read32(CAL+4)==64*1630
+assert get('vdda_mv')==2800 and mock['writes']==4 and mock['running']
+assert bytes(u.mem_read(CAL,16))==old_cal
+assert read32(CAL+16)==0x56445232 and read32(CAL+20)==64*1758 and read32(CAL+24)==2800
+assert get('reference_calibration_revision')==2 and get('adc_sample_cycles_x2')==3
 put('uwTick',4999);events=len(mock['events']);invoke('sample_tick');assert len(mock['events'])==events
 mock['code']=1492;put('uwTick',5000);invoke('sample_tick')
 assert abs(get('vdda_mv')-3300)<=1 and mock['writes']==4 and mock['running']
@@ -154,12 +160,29 @@ prior=get('vdda_mv');mock['timeout']=True;put('uwTick',15000);invoke('sample_tic
 assert get('vdda_mv')==prior and get('reference_errors')==1 and mock['running']
 mock['timeout']=False;mock['code']=0;put('uwTick',20000);invoke('sample_tick')
 assert get('vdda_mv')==prior and get('reference_errors')==2 and mock['running']
-mock['code']=1758;mock['running']=False;mock['dma']=False
-invoke('sample_start') # Reboot uses stored calibration; no re-anchoring to3020.
-assert get('vdda_mv')==2800 and mock['writes']==4
+mock['code']=1630;mock['running']=False;mock['dma']=False
+invoke('sample_start') # Reboot at 3.02V reuses stored 2.80V calibration, no re-anchoring.
+assert get('vdda_mv')==3020 and mock['writes']==4
 assert invoke('sample_rate',1)==1 and get('sample_hz')==2000 and read32(TIM3+44)==35999
+assert get('adc_sample_cycles_x2')==479
 assert get('reference_next')==get('uwTick')+5000,'slow frames starved by reference updates'
 assert invoke('sample_rate',9999999)==1 and get('sample_hz')==600000 and read32(TIM3+44)==119
+assert get('adc_sample_cycles_x2')==3
+assert invoke('sample_rate',64000)==1 and get('adc_sample_cycles_x2')==143
+assert read32(ADC1+16)&7==6 and (read32(ADC2+16)>>3)&7==6
+# Illustrative high-impedance bias network, not measured board component values.
+# Model acquisition-capacitor charging to show why software gain cannot repair it.
+acquisition=[]
+for sample_cycles in [1.5,get('adc_sample_cycles_x2')/2]:
+    alpha=-math.expm1(-sample_cycles/(12000000*50000*8e-12))
+    vin=2048+(500*4096/2800)*np.sin(2*np.pi*np.arange(1152)/64)
+    sampled=[];previous=2048.
+    for value in vin:
+        previous+=alpha*(value-previous);sampled.append(previous)
+    r,_=run(np.array(sampled[-1024:]),np.array(sampled[-1024:]),64000,vdda=2800)
+    acquisition.append(int(r[0,2]))
+assert acquisition[0]<980 and abs(acquisition[1]-1000)<=2,acquisition
+assert invoke('sample_rate',600000)==1 and get('adc_sample_cycles_x2')==3
 # The first two post-switch records are discarded, never spliced into an old frame.
 for index,(cb,left) in enumerate([('HAL_ADC_ConvHalfCpltCallback',1024),('HAL_ADC_ConvCpltCallback',2048),('HAL_ADC_ConvHalfCpltCallback',1024)]):
     write32(DMA+12,left);invoke(cb,symbols['hadc1']);ptr=invoke('sample_take')
@@ -245,6 +268,18 @@ assert min(early_vpp)>=997 and max(early_vpp)<=1003,early_vpp
 assert get('reference_updates')-updates_before>=3
 assert get('vdda_mv')==2800 and read32(CAL+8)==3020
 assert b't7.txt="2800mV"' in commands,'screen did not show the automatically updated reference'
+# Power-loss fragment and full-page handling: append past incomplete data, never erase.
+saved_page=bytes(u.mem_read(CAL,1024));mock['running']=False;mock['dma']=False
+partial=struct.pack('<4I',0xffffffff,64*1758,2800,0xffffffff)
+u.mem_write(CAL,old_cal+partial+b'\xff'*(1024-32))
+writes=mock['writes'];invoke('load_calibration',64*1758)
+assert bytes(u.mem_read(CAL,32))==old_cal+partial
+assert read32(CAL+32)==0x56445232 and mock['writes']==writes+4
+u.mem_write(CAL,b'\x00'*1024);writes=mock['writes'];errors=get('reference_store_errors')
+invoke('load_calibration',64*1758)
+assert mock['writes']==writes and get('reference_store_errors')==errors+1
+assert bytes(u.mem_read(CAL,1024))==b'\x00'*1024,'full calibration page was erased'
+u.mem_write(CAL,saved_page);invoke('load_calibration',64*1758)
 # Recover from missing transparent-mode acknowledgements without leaving the panel
 # permanently waiting for raw bytes. Also exercise the older-panel ASCII fallback.
 put('uwTick',23000);write32(symbols['txlen'],0);write32(symbols['paint'],1)
@@ -271,7 +306,13 @@ result['checks']+=['real HAL post-calibration ADON guard','continuous DMA-to-UAR
                   '115200-baud addt FE/FD transport and exact byte counts',
                   'STOP and AUTO during raw transfer','no short-probe VPP publication',
                   'lost FE/FD recovery and ASCII fallback','five-second VREF deadline survives rate probes']
-result['checks']+=['VDDA auto tracks 3020mV to 2800mV without changing initial calibration']
+result['checks']+=['revision-2 2800mV calibration appends once and reuses record on reboot',
+                  'old revision-1 calibration retained byte-for-byte',
+                  'VDDA auto tracks 3020mV to 2800mV without rewriting reference',
+                  'external acquisition time follows rate budget on both ADCs']
+result['checks']+=['incomplete calibration slot skipped','full calibration page never auto-erased']
+result['acquisition_RC_example']={'R_ohm':50000,'C_farad':8e-12,
+                                 'vpp_mv_at_1p5_and_71p5_cycles':acquisition}
 result['stream_test']={'screen_frames':screen_frames,'first_and_last_hz':[seen_hz[0],seen_hz[-1]],
                        'uart_bytes':len(uart),'raw_blocks':len(payloads),
                        '1kHz_vpp_range_mv':[min(early_vpp),max(early_vpp)],
