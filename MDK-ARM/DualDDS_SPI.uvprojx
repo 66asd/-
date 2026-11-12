@@ -381,6 +381,31 @@
       </TargetOption>
       <Groups>
         <Group>
+          <GroupName>ADC Configuration</GroupName>
+          <Files>
+            <File>
+              <FileName>config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/config.h</FilePath>
+            </File>
+            <File>
+              <FileName>system_app.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/system_app.h</FilePath>
+            </File>
+            <File>
+              <FileName>sine_table.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/sine_table.h</FilePath>
+            </File>
+            <File>
+              <FileName>README_ADC.md</FileName>
+              <FileType>5</FileType>
+              <FilePath>../README_ADC.md</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Application/MDK-ARM</GroupName>
           <Files>
             <File>

@@ -6,6 +6,9 @@
 避免在screen_init之前进入Error_Handler而全屏没有波形。
 HMI 无需重新修改，继续使用已配置按钮事件的 `DualDDS2.HMI` / `DualDDS2.tft`。
 必须重新编译/烧录 `MDK-ARM/DualDDS_SPI/DualDDS_SPI.hex` 到 STM32。
+直接使用Keil的用户：打开 `MDK-ARM/DualDDS_SPI.uvprojx`，F7编译、F8下载到开发板。
+工程中的 `ADC Configuration` 分组包含本次配置与说明；当前 `ADC_VDDA_CAL_MV=2800`、
+`ADC_CAL_REVISION=2`。无需单独操作HEX文件，源码、工程和输出均已更新。
 第0006次更改针对周期性卡顿与实板VPP波动：整数内积加速正弦拟合、曲线addt批量发送、
 约16周期测量窗口，并禁止把改速中周期不足的探测帧发送为幅值读数。
 第0007次按用户新要求把1000mVpp的软件验收收紧到998～1002mV：修复原始带噪分位数
