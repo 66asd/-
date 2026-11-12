@@ -22,16 +22,20 @@
 #define DWELL_MIN 50
 #define DWELL_MAX 2000
 #define VDDA_MV 3300
-/* Set to a measured VDDA for absolute accuracy; zero uses calibrated VREFINT. */
-#define ADC_VDDA_CAL_MV 0U
+/* First calibration only: measured supply, persisted with its averaged VREF code. */
+#define ADC_VDDA_CAL_MV 3020U
 #define ADC_VREFINT_CAL_MV 1200U
+#define ADC_CAL_ADDRESS 0x0800FC00UL /* Reserved last 1KB of the 64KB C8 flash. */
+#define ADC_REFERENCE_MS 1000U
 #define DDS_ENABLED 0
 /* ADC-pin mV to original mV, independently measured divider gains. */
 #define GAIN1_PERMILLE 1000
 #define GAIN2_PERMILLE 1000
-#define FS_HZ 400000UL
-#define FS_MAX_HZ 400000UL
+#define FS_HZ 600000UL
+#define FS_MAX_HZ 600000UL
 #define FS_MIN_HZ 2000UL
+#define SCOPE_MAX_HZ 100000UL
+#define SCOPE_PROBE_MS 2000U
 #define HALF_PAIRS 1024U
 #define PLOT_WIDTH 241U
 #define PLOT_WIDTH2 238U

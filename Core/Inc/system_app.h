@@ -12,6 +12,8 @@ static inline void check(HAL_StatusTypeDef status)
 }
 void screen_uart_irq(void);
 void sample_start(void);
+void sample_tick(void);
+unsigned reference_voltage(uint32_t calibration_sum, uint32_t sum, unsigned calibration_mv);
 void sample_changed(void);
 extern unsigned sample_hz;
 int sample_rate(unsigned hz);
@@ -31,6 +33,7 @@ extern unsigned vdda_mv;
 void reset_span(void);
 int span_ready(const uint32_t *pairs);
 void measure(const uint32_t *pairs);
+void measure_auto(void);
 void screen_init(void);
 void screen_tick(void);
 void screen_invalidate(void);

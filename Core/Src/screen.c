@@ -7,7 +7,7 @@ static volatile uint8_t head,tail,overflow;
 static volatile unsigned txpos,txlen;
 static uint8_t frame[8],used;
 static unsigned page=255,row,dirty=1,plot,paint;
-static uint32_t nextframe,query;
+static uint32_t nextframe,query,nextprobe;
 /* 示波器式 RUN/STOP：scope_hold=1 冻结画面；scope_clear 为待发送的曲线清零命令数。 */
 static uint8_t scope_hold,scope_clear,scope_auto=1;
 void screen_uart_irq(void){
@@ -37,6 +37,8 @@ void scope_key(unsigned id){
     if(id==SCOPE_KEY_AUTO){
         scope_hold=0;
         scope_auto=1;
+        measure_auto();
+        nextprobe=0;
         paint=0;plot=0;
         scope_clear=2;          /* 依次清除 s0(ID=1) 和 s1(ID=15) */
         sample_changed();       /* 丢掉停止期间的旧快照，重新等稳定窗口 */
@@ -121,6 +123,11 @@ void screen_tick(void){
     if(page!=3){scope_clear=0;return;}
     if(!paint){
         if(scope_hold)return;       /* STOP：不再取新样本，画面停在最后一帧 */
+        /* Periodic wideband acquisition escapes aliases after a frequency jump. */
+        if(scope_auto && (!nextprobe || (int32_t)(now-nextprobe)>=0)){
+            nextprobe=now+SCOPE_PROBE_MS;
+            if(sample_rate(FS_MAX_HZ))return;
+        }
         const uint32_t *p=sample_take();if(!p || !span_ready(p))return;
         measure(p);
         if(scope_auto){

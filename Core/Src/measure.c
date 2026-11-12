@@ -7,6 +7,9 @@ Reading reading[2];
 uint8_t trace[2][PLOT_WIDTH];
 static float profile[2][PROFILE];
 static float periods[2], origins[2];
+static float display_seconds;
+static unsigned auto_time=1;
+void measure_auto(void){auto_time=1;}
 static unsigned code(const uint32_t *p, unsigned i, unsigned ch) {
     return (p[i] >> (ch * 16U)) & 4095U;
 }
@@ -57,7 +60,8 @@ static void analyze(const uint32_t *p, unsigned ch) {
         /* Least-squares slope of all crossing times; retain fractional samples. */
         float k=0.5f*(n-1U);
         period=(skt-k*st)/(n*(n*(float)n-1.0f)/12.0f);
-        if(period<8.0f || worst>period*0.15f)period=0;
+        /* Allow crossing quantization around the inclusive 100kHz/6-sample limit. */
+        if(period<5.9f || sample_hz/period>SCOPE_MAX_HZ*1.01f || worst>period*0.15f)period=0;
     }
     if(period>0) {
         r->period_q8=(unsigned)(period*256.0f+0.5f);
@@ -116,7 +120,7 @@ static void analyze(const uint32_t *p, unsigned ch) {
         ss-=s*s/count; cc-=c*c/count; sc-=s*c/count;
         sy-=s*m; cy-=c*m; yy-=ysum*m;
         float det=ss*cc-sc*sc;
-        if(det>1 && yy>1 && !r->clipped && period>=16) {
+        if(det>1 && yy>1 && !r->clipped && period>=5.9f) {
             float a=(sy*cc-cy*sc)/det, b=(cy*ss-sy*sc)/det;
             float residual=yy-a*sy-b*cy;
             if(residual<yy*0.0004f) {
@@ -137,7 +141,11 @@ static void analyze(const uint32_t *p, unsigned ch) {
 void measure(const uint32_t *pairs) {
     analyze(pairs,0); analyze(pairs,1);
     unsigned ref=periods[0]>0?0:1;
-    float window=periods[ref]>0?SCOPE_CYCLES*periods[ref]:DEFAULT_WINDOW;
+    if(auto_time && periods[ref]>0){
+        display_seconds=SCOPE_CYCLES*periods[ref]/sample_hz;
+        auto_time=0;
+    }
+    float window=display_seconds>0?display_seconds*sample_hz:DEFAULT_WINDOW;
     if(window>HALF_PAIRS-2U)window=HALF_PAIRS-2U;
     if(window<2)window=2;
     float trigger=origins[ref];

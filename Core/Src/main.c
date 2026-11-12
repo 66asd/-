@@ -114,6 +114,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     settings_tick();
+    sample_tick();
     screen_tick();
   }
   /* USER CODE END 3 */
