@@ -1,6 +1,7 @@
 *.HMI
 *.hmi
 ADC/Drivers/
+ADC/.mxproject
 ADC/MDK-ARM/ADC/
 ADC/MDK-ARM/DebugConfig/
 ADC/MDK-ARM/RTE/

@@ -10,7 +10,7 @@
 - Destination: https://github.com/66asd/-.git (remote `codex-backup`).
 - Stable project ID: `stm32f103-adc1-3a77f2a226`.
 - Include: `AGENTS.md`, `.gitignore`, `ADC/ADC.ioc`, `ADC/Core/`, `ADC/App/`,
-  `ADC/Tests/`, `ADC/Tools/`, `ADC/README.md`, `ADC/MDK-ARM/ADC.uvprojx`,
+  `ADC/Tests/`, `ADC/Tools/`, `ADC/README.md`, `ADC/hmi_page3_contract.json`, `ADC/MDK-ARM/ADC.uvprojx`,
   `ADC/MDK-ARM/startup_stm32f103xb.s` and reviewed project build configuration.
 - Exclude HMI binaries, vendor `ADC/Drivers/` dependencies, IDE session state,
   compiled outputs, credentials and unrelated projects.

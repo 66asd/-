@@ -338,7 +338,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F103xB</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include</IncludePath>
+              <IncludePath>../App;../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -379,6 +379,56 @@
         </TargetArmAds>
       </TargetOption>
       <Groups>
+        <Group>
+          <GroupName>Scope Application</GroupName>
+          <Files>
+            <File>
+              <FileName>hmi_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/hmi_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>hmi_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/hmi_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>measure_frequency.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/measure_frequency.c</FilePath>
+            </File>
+            <File>
+              <FileName>measure_rms.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/measure_rms.c</FilePath>
+            </File>
+            <File>
+              <FileName>measure_vpp.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/measure_vpp.c</FilePath>
+            </File>
+            <File>
+              <FileName>scope_acquisition.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/scope_acquisition.c</FilePath>
+            </File>
+            <File>
+              <FileName>scope_app.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/scope_app.c</FilePath>
+            </File>
+            <File>
+              <FileName>scope_waveform.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/scope_waveform.c</FilePath>
+            </File>
+            <File>
+              <FileName>sine_fit.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/sine_fit.c</FilePath>
+            </File>
+          </Files>
+        </Group>
         <Group>
           <GroupName>Application/MDK-ARM</GroupName>
           <Files>

@@ -26,6 +26,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "scope_app.h"
 
 /* USER CODE END Includes */
 
@@ -96,6 +97,10 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  if (!ScopeApp_Init())
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
@@ -106,6 +111,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    ScopeApp_Process();
   }
   /* USER CODE END 3 */
 }
