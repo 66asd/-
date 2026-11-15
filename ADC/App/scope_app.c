@@ -7,6 +7,7 @@
 #include "scope_waveform.h"
 #include "sample_rate.h"
 #include "hmi_uart.h"
+#include "vofa_raw.h"
 #include "main.h"
 #include <string.h>
 
@@ -178,7 +179,10 @@ void ScopeApp_Process(void)
         if (available<0 || gap) {
             for(i=0u;i<2u;++i) if(channels[i].state==CAPTURE) reset_capture(&channels[i]);
         }
-        if(available>0) { collect(&channels[0],0u); collect(&channels[1],1u); ++g_scope_diagnostics.processed_blocks; }
+        if(available>0) {
+            VofaRaw_Offer(raw_copy,SCOPE_DMA_HALF_WORDS,Acquisition_Rate());
+            collect(&channels[0],0u); collect(&channels[1],1u); ++g_scope_diagnostics.processed_blocks;
+        }
         analyze(&channels[0],0u,now); analyze(&channels[1],1u,now);
         if(probing && probe_done==3u) { probing=0u; last_probe=now; }
         if(!probing && ((events&HMI_EVENT_AUTO) || (uint32_t)(now-last_probe)>=SCOPE_PROBE_INTERVAL_MS)) {
@@ -191,7 +195,7 @@ void ScopeApp_Process(void)
         }
         if(Acquisition_HasFault()) g_scope_diagnostics.adc_fault=1u;
     }
-    if(HmiProtocol_CanSubmit(h) && (uint32_t)(now-last_display)>=SCOPE_DISPLAY_INTERVAL_MS) {
+    if(!VofaRaw_Enabled() && HmiProtocol_CanSubmit(h) && (uint32_t)(now-last_display)>=SCOPE_DISPLAY_INTERVAL_MS) {
         for(i=0u;i<2u;++i) {
             ScopeChannel *c=&channels[i];
             display.reading[i].frequency_tenths=(uint32_t)(c->hz*10.0f+0.5f);

@@ -7,6 +7,8 @@ ADC/MDK-ARM/DebugConfig/
 ADC/MDK-ARM/RTE/
 *.uvguix.*
 *.uvoptx
+!ADC/MDK-ARM/ADC_1k_20k.uvoptx
+!ADC/MDK-ARM/ADC_1k_100k.uvoptx
 *.bak
 *.o
 *.obj

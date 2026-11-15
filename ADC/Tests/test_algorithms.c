@@ -9,6 +9,7 @@
 #include "hmi_uart.h"
 #include "main.h"
 #include "sample_rate.h"
+#include "vofa_raw.h"
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -325,6 +326,7 @@ int Acquisition_HasFault(void) { return 0; }
 uint32_t Acquisition_Overruns(void) { return mock_overruns; }
 int HmiUart_Init(void)
 {
+    VofaRaw_Init(0,0);
     memset(screen_text,0,sizeof(screen_text));
     tx_busy=0; HmiProtocol_Init(&hmi,mock_send,0,mock_tick); return 1;
 }

@@ -52,7 +52,7 @@
           <OutputName>ADC</OutputName>
           <CreateExecutable>1</CreateExecutable>
           <CreateLib>0</CreateLib>
-          <CreateHexFile>1</CreateHexFile>
+          <CreateHexFile>0</CreateHexFile>
           <DebugInformation>1</DebugInformation>
           <BrowseInformation>1</BrowseInformation>
           <ListingPath></ListingPath>
@@ -126,6 +126,25 @@
             <HexOffset>0</HexOffset>
             <Oh166RecLen>16</Oh166RecLen>
           </OPTHX>
+          <Target>
+            <UseTarget>1</UseTarget>
+            <LoadApplicationAtStartup>1</LoadApplicationAtStartup>
+            <RunToMain>1</RunToMain>
+            <RestoreBreakpoints>1</RestoreBreakpoints>
+            <RestoreWatchpoints>1</RestoreWatchpoints>
+            <RestoreMemoryDisplay>1</RestoreMemoryDisplay>
+            <RestoreFunctions>1</RestoreFunctions>
+            <RestoreToolbox>1</RestoreToolbox>
+            <RestoreTracepoints>1</RestoreTracepoints>
+          </Target>
+          <TargetDlls>
+            <CpuDll />
+            <CpuDllArguments />
+            <PeripheralDll />
+            <PeripheralDllArguments />
+            <InitializationFile />
+            <Driver>Segger\JL2CM3.dll</Driver>
+          </TargetDlls>
         </DebugOption>
         <Utilities>
           <Flash1>
@@ -137,7 +156,7 @@
             <DriverSelection>4101</DriverSelection>
           </Flash1>
           <bUseTDR>1</bUseTDR>
-          <Flash2>BIN\UL2V8M.DLL</Flash2>
+          <Flash2>Segger\JL2CM3.dll</Flash2>
           <Flash3></Flash3>
           <Flash4></Flash4>
           <pFcarmOut></pFcarmOut>
@@ -417,6 +436,11 @@
               <FileName>scope_acquisition.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/scope_acquisition.c</FilePath>
+            </File>
+            <File>
+              <FileName>vofa_raw.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/vofa_raw.c</FilePath>
             </File>
             <File>
               <FileName>scope_app.c</FileName>

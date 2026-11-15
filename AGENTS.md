@@ -4,6 +4,9 @@
 - Do not modify any HMI file. Use the current `DualDDS2.HMI` page3 definitions.
 - Keep acquisition, frequency, AC RMS, VPP, waveform and HMI protocol in separate modules.
 - Preserve CubeMX USER CODE sections and add application sources to the Keil project.
+- Use J-Link for downloading/debugging. Never generate HEX files; deliver Keil projects and AXF builds.
+- Keep low/high sampling Keil projects in `ADC/MDK-ARM/` (1 kHz uses 20/100 kS/s respectively).
+- VOFA+ temporarily replaces the screen on USART1; never mix raw samples with HMI commands.
 
 ## Approved code backup scope
 
@@ -11,7 +14,8 @@
 - Stable project ID: `stm32f103-adc1-3a77f2a226`.
 - Include: `AGENTS.md`, `.gitignore`, `ADC/ADC.ioc`, `ADC/Core/`, `ADC/App/`,
   `ADC/Tests/`, `ADC/Tools/`, `ADC/README.md`, `ADC/hmi_page3_contract.json`, `ADC/MDK-ARM/ADC.uvprojx`,
-  `ADC/MDK-ARM/startup_stm32f103xb.s` and reviewed project build configuration.
+  `ADC/MDK-ARM/ADC_1k_20k.uvprojx`, `ADC/MDK-ARM/ADC_1k_100k.uvprojx`,
+  their two minimal `.uvoptx` J-Link configurations, `ADC/MDK-ARM/startup_stm32f103xb.s` and reviewed project build configuration.
 - Exclude HMI binaries, vendor `ADC/Drivers/` dependencies, IDE session state,
   compiled outputs, credentials and unrelated projects.
 - Use the git-code-backup skill before source edits and before completion.

@@ -11,14 +11,22 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
 BUILD.mkdir(exist_ok=True)
 acquisition_test = '--acquisition' in sys.argv
+vofa_test = '--vofa' in sys.argv
+assert not (acquisition_test and vofa_test)
 points = int(sys.argv[sys.argv.index('--points')+1]) if '--points' in sys.argv else 16
 if points not in (16,64):
     raise SystemExit('--points must be 16 or 64')
 sources = ['scope_acquisition.c'] if acquisition_test else ['measure_frequency.c', 'measure_rms.c', 'measure_vpp.c',
-           'sine_fit.c', 'scope_waveform.c', 'hmi_protocol.c', 'scope_app.c', 'sample_rate.c']
+           'sine_fit.c', 'scope_waveform.c', 'hmi_protocol.c', 'scope_app.c', 'sample_rate.c', 'vofa_raw.c']
+if vofa_test:
+    sources = ['vofa_raw.c', 'hmi_uart.c', 'hmi_protocol.c']
 test_source = ROOT / ('Tests/test_acquisition.c' if acquisition_test else 'Tests/test_algorithms.c')
 fake_includes = ROOT / ('Tests/acquisition_fakes' if acquisition_test else 'Tests/fakes')
 elf = BUILD / ('acquisition-tests.elf' if acquisition_test else 'algorithm-tests.elf')
+if vofa_test:
+    test_source = ROOT / 'Tests/test_vofa.c'
+    fake_includes = ROOT / 'Tests/vofa_fakes'
+    elf = BUILD / 'vofa-tests.elf'
 keil = Path(os.environ.get('KEIL_ROOT', 'D:/keil5')) / 'ARM/ARMCC/bin'
 if (keil / 'armcc.exe').exists():
     objects = []
@@ -93,7 +101,8 @@ print(f'Cortex-M3 C tests: cases={word("test_case")}, elapsed={time.monotonic()-
 if not stopped or not word('test_passed'):
     print(f'FAILED line={word("test_failed_line")} details={details}')
     sys.exit(1)
-print('PASS: timer/DMA bootstrap, dual mode restore, all rates and packed samples' if acquisition_test else
+print('PASS: raw ADC1 identity, ordering, UART mode switching, retry and timeout recovery' if vofa_test else
+      'PASS: timer/DMA bootstrap, dual mode restore, all rates and packed samples' if acquisition_test else
       'PASS: frequency, AC RMS, robust/model VPP, waveform, asynchronous HMI and dynamic-rate application pipeline')
 
 if 'test_vpp_comparison' in symbols:

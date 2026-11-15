@@ -98,17 +98,28 @@ for key, value in {
     assert ioc[key] == value, f'Incorrect CubeMX setting: {key}'
 assert ioc['NVIC.USART1_IRQn'].startswith('true')
 assert int(ioc['RCC.APB1TimFreq_Value']) // (int(ioc['TIM3.Prescaler'])+1) // (int(ioc['TIM3.Period'])+1) == 500000
-project = ET.parse(ROOT/'MDK-ARM/ADC.uvprojx')
-paths = [p.text.replace('\\','/') for p in project.findall('.//FilePath')]
-for source in sorted((ROOT/'App').glob('*.c')):
-    assert paths.count('../App/'+source.name) == 1, f'Keil does not include {source.name}'
-for path in paths:
-    assert (ROOT/'MDK-ARM'/path).exists(), f'Missing Keil source: {path}'
-assert '../App' in project.find('.//Cads/VariousControls/IncludePath').text.split(';')
+for name, points in [('ADC',None),('ADC_1k_20k',16),('ADC_1k_100k',64)]:
+    project = ET.parse(ROOT/f'MDK-ARM/{name}.uvprojx')
+    assert project.find('.//CreateHexFile').text == '0', f'HEX output forbidden: {name}'
+    assert project.find('.//Utilities/Flash2').text == 'Segger\\JL2CM3.dll'
+    assert project.find('.//TargetDlls/Driver').text == 'Segger\\JL2CM3.dll'
+    paths = [p.text.replace('\\','/') for p in project.findall('.//FilePath')]
+    for source in sorted((ROOT/'App').glob('*.c')):
+        assert paths.count('../App/'+source.name) == 1, f'{name} does not include {source.name}'
+    for path in paths:
+        assert (ROOT/'MDK-ARM'/path).exists(), f'Missing Keil source: {path}'
+    assert '../App' in project.find('.//Cads/VariousControls/IncludePath').text.split(';')
+    if points:
+        assert f'SCOPE_TARGET_POINTS={points}' in project.find('.//Cads/VariousControls/Define').text.split(',')
+        assert project.find('.//OutputDirectory').text == f'..\\build\\{name}\\'
+        options = ET.parse(ROOT/f'MDK-ARM/{name}.uvoptx')
+        assert options.find('.//DebugOpt/pMon').text == 'Segger\\JL2CM3.dll'
+        assert options.find('.//SetRegEntry/Key').text == 'JL2CM3'
+        assert '-FL010000' in options.find('.//SetRegEntry/Name').text
 manifest = {'hmi_file':HMI.name, 'sha256':digest, 'baud':115200, 'page':3, 'objects':objects}
 if '--write-manifest' in sys.argv:
     (ROOT/'hmi_page3_contract.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
 else:
     stored = json.loads((ROOT/'hmi_page3_contract.json').read_text(encoding='utf-8'))
     assert stored == manifest, 'Stored HMI contract does not match the original file'
-print('PASS: CubeMX 500 kS/s dual ADC, Keil sources, immutable HMI hash and all page3 bindings')
+print('PASS: CubeMX dual ADC, three J-Link Keil projects with HEX disabled, immutable HMI/page3')
