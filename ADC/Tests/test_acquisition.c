@@ -14,7 +14,7 @@ ADC_HandleTypeDef hadc1={ADC1},hadc2={ADC2};
 DMA_HandleTypeDef hdma_adc1;
 static TIM_TypeDef timer;
 TIM_HandleTypeDef htim3={&timer,{0u,359u}};
-static uint32_t mode_value,calibrations,mode_restores;
+static uint32_t mode_value,calibrations,mode_restores,slave_starts;
 static int timer_on,irq_enabled;
 static uint32_t *dma;
 static uint32_t copy[SCOPE_DMA_HALF_WORDS];
@@ -25,7 +25,13 @@ HAL_StatusTypeDef HAL_TIM_Base_Start(TIM_HandleTypeDef *h)
     (void)h; CHECK(hdma_adc1.busy && mode_value==ADC_DUALMODE_REGSIMULT && irq_enabled);
     CHECK(timer.CNT==0u && (timer.SR&TIM_FLAG_UPDATE)==0u); timer_on=1; return HAL_OK;
 }
-HAL_StatusTypeDef HAL_ADC_Stop(ADC_HandleTypeDef *h) { h->Instance->CR2=0u; return HAL_OK; }
+HAL_StatusTypeDef HAL_ADC_Stop(ADC_HandleTypeDef *h) { h->Instance->CR2&=~ADC_CR2_ADON; return HAL_OK; }
+HAL_StatusTypeDef HAL_ADC_Start(ADC_HandleTypeDef *h)
+{
+    CHECK(h->Instance==ADC2 && mode_value==ADC_DUALMODE_REGSIMULT && !timer_on);
+    h->Instance->CR2|=ADC_CR2_ADON|ADC_CR2_EXTTRIG;
+    ++slave_starts; return HAL_OK;
+}
 HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *h)
 {
     CHECK(!timer_on); ++calibrations; h->Instance->CR2=1u; return HAL_OK;
@@ -34,19 +40,24 @@ HAL_StatusTypeDef HAL_ADCEx_MultiModeStop_DMA(ADC_HandleTypeDef *h)
 {
     (void)h; CHECK(!timer_on);
     /* These two details reproduce the real F1 HAL, not an always-success stub. */
-    mode_value=0u; fake_adc1.CR2=fake_adc2.CR2=0u;
+    mode_value=0u; fake_adc1.CR2&=~ADC_CR2_ADON; fake_adc2.CR2&=~ADC_CR2_ADON;
     if(!hdma_adc1.busy) return HAL_ERROR;
     hdma_adc1.busy=0; return HAL_OK;
 }
 HAL_StatusTypeDef HAL_ADCEx_MultiModeConfigChannel(ADC_HandleTypeDef *h,ADC_MultiModeTypeDef *m)
 {
-    (void)h; CHECK(!fake_adc1.CR2 && !fake_adc2.CR2 && !timer_on);
+    (void)h; CHECK(!(fake_adc1.CR2&ADC_CR2_ADON) && !(fake_adc2.CR2&ADC_CR2_ADON) && !timer_on);
     mode_value=m->Mode; ++mode_restores; return HAL_OK;
 }
 HAL_StatusTypeDef HAL_ADCEx_MultiModeStart_DMA(ADC_HandleTypeDef *h,uint32_t *p,uint32_t n)
 {
     (void)h; CHECK(!hdma_adc1.busy && !timer_on && mode_value==ADC_DUALMODE_REGSIMULT);
-    CHECK(n==1024u); dma=p; hdma_adc1.busy=1; fake_adc1.CR2=fake_adc2.CR2=1u; return HAL_OK;
+    CHECK(n==1024u);
+    CHECK((fake_adc2.CR2&(ADC_CR2_EXTTRIG|ADC_CR2_ADON))==(ADC_CR2_EXTTRIG|ADC_CR2_ADON));
+    CHECK(!(fake_adc2.CR2&ADC_CR2_SWSTART));
+    dma=p; hdma_adc1.busy=1;
+    fake_adc1.CR2|=ADC_CR2_ADON|ADC_CR2_EXTTRIG;
+    fake_adc2.CR2|=ADC_CR2_ADON; return HAL_OK;
 }
 void HAL_NVIC_DisableIRQ(int irq) { (void)irq; irq_enabled=0; }
 void HAL_NVIC_EnableIRQ(int irq) { (void)irq; irq_enabled=1; }
@@ -62,6 +73,7 @@ void test_start(void)
     CHECK(Acquisition_Rate()==500000u && timer.ARR==143u);
     for(i=0u;i<7u;++i) {
         ++test_case;
+        fake_adc2.CR2&=~ADC_CR2_EXTTRIG;
         CHECK(Acquisition_SetRate(rates[i]));
         CHECK(timer.ARR==72000000u/rates[i]-1u && Acquisition_Rate()==rates[i]);
         CHECK(Acquisition_CopyLatest(copy,&index,&gap)==0);
@@ -75,7 +87,7 @@ void test_start(void)
     }
     ++test_case; CHECK(!Acquisition_SetRate(1000000u) && timer_on);
     CHECK(!Acquisition_SetRate(0u) && timer_on);
-    CHECK(Acquisition_Overruns()==7u && mode_restores==8u);
+    CHECK(Acquisition_Overruns()==7u && mode_restores==8u && slave_starts==8u);
     HAL_ADC_ErrorCallback(&hadc2); CHECK(Acquisition_HasFault());
     CHECK(Acquisition_Start()); CHECK(calibrations==4u && !Acquisition_HasFault());
     test_passed=1u; STOP(); for(;;){}

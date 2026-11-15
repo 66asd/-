@@ -3,7 +3,9 @@
 
 #define SCOPE_SAMPLE_RATE_HZ       500000u /* Maximum and acquisition-search rate. */
 #define SCOPE_MIN_FREQUENCY_HZ     50u
-#define SCOPE_TARGET_POINTS        64u
+#ifndef SCOPE_TARGET_POINTS
+#define SCOPE_TARGET_POINTS        16u /* 1 kHz uses 20 kS/s instead of 100 kS/s. */
+#endif
 #define SCOPE_PROBE_INTERVAL_MS    1000u
 #define SCOPE_RATE_HOLD_MS         300u
 #define SCOPE_REFERENCE_MV         3300u /* Measure VDDA and calibrate this value. */

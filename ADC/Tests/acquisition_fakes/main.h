@@ -21,6 +21,9 @@ extern RCC_TypeDef fake_rcc;
 #define TIM_FLAG_UPDATE 1u
 #define DMA_FLAG_GL1 1u
 #define ADC_DUALMODE_REGSIMULT 6u
+#define ADC_CR2_ADON 1u
+#define ADC_CR2_EXTTRIG (1u<<20)
+#define ADC_CR2_SWSTART (1u<<22)
 #define DMA1_Channel1_IRQn 0
 #define __DMB() do {} while(0)
 #define __HAL_TIM_SET_AUTORELOAD(h,n) ((h)->Instance->ARR=(n))
@@ -31,6 +34,7 @@ uint32_t HAL_RCC_GetPCLK1Freq(void);
 HAL_StatusTypeDef HAL_TIM_Base_Stop(TIM_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_TIM_Base_Start(TIM_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_ADC_Stop(ADC_HandleTypeDef *h);
+HAL_StatusTypeDef HAL_ADC_Start(ADC_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_ADCEx_MultiModeStop_DMA(ADC_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_ADCEx_MultiModeStart_DMA(ADC_HandleTypeDef *h,uint32_t *p,uint32_t n);

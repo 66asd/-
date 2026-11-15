@@ -39,6 +39,10 @@ int Acquisition_SetRate(uint32_t rate)
     if (HAL_ADCEx_MultiModeConfigChannel(&hadc1,&mode) != HAL_OK) {
         HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn); return 0;
     }
+    /* This F1 HAL Init leaves EXTTRIG clear; MultiModeStart only arms the master. */
+    if (HAL_ADC_Start(&hadc2) != HAL_OK) {
+        HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn); return 0;
+    }
     if (HAL_ADCEx_MultiModeStart_DMA(&hadc1, (uint32_t *)dma_words, SCOPE_DMA_WORDS) != HAL_OK) {
         HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn); return 0;
     }

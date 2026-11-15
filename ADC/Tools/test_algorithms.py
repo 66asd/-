@@ -11,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
 BUILD.mkdir(exist_ok=True)
 acquisition_test = '--acquisition' in sys.argv
+points = int(sys.argv[sys.argv.index('--points')+1]) if '--points' in sys.argv else 16
+if points not in (16,64):
+    raise SystemExit('--points must be 16 or 64')
 sources = ['scope_acquisition.c'] if acquisition_test else ['measure_frequency.c', 'measure_rms.c', 'measure_vpp.c',
            'sine_fit.c', 'scope_waveform.c', 'hmi_protocol.c', 'scope_app.c', 'sample_rate.c']
 test_source = ROOT / ('Tests/test_acquisition.c' if acquisition_test else 'Tests/test_algorithms.c')
@@ -21,7 +24,7 @@ if (keil / 'armcc.exe').exists():
     objects = []
     for source in [test_source] + [ROOT / 'App' / name for name in sources]:
         obj = BUILD / ('test-' + source.stem + '.o')
-        subprocess.run([str(keil / 'armcc.exe'), '--cpu=Cortex-M3', '--c99', '-O2', '-g',
+        subprocess.run([str(keil / 'armcc.exe'), '--cpu=Cortex-M3', '--c99', '-O2', '-g', '-DSCOPE_TARGET_POINTS='+str(points),
                         '--split_sections', '--diag_error=warning', '-I' + str(fake_includes),
                         '-I' + str(ROOT / 'App'),
                         '-c', str(source), '-o', str(obj)], check=True)
@@ -37,7 +40,7 @@ else:
     if not gcc:
         raise SystemExit('Keil ARMCC or arm-none-eabi-gcc is required')
     cmd = [gcc, '-mcpu=cortex-m3', '-mthumb', '-O2', '-g', '-std=c99',
-           '-Wall', '-Wextra', '-Werror', '-ffunction-sections', '-fdata-sections',
+           '-Wall', '-Wextra', '-Werror', '-DSCOPE_TARGET_POINTS='+str(points), '-ffunction-sections', '-fdata-sections',
            '-I' + str(fake_includes), '-I' + str(ROOT / 'App'), '-nostartfiles', '--specs=nosys.specs',
            '-Wl,--gc-sections', '-T' + str(ROOT / 'Tests/test_memory.ld'),
            str(test_source)]
@@ -92,3 +95,7 @@ if not stopped or not word('test_passed'):
     sys.exit(1)
 print('PASS: timer/DMA bootstrap, dual mode restore, all rates and packed samples' if acquisition_test else
       'PASS: frequency, AC RMS, robust/model VPP, waveform, asynchronous HMI and dynamic-rate application pipeline')
+
+if 'test_vpp_comparison' in symbols:
+    values=struct.unpack('<3f',cpu.mem_read(symbols['test_vpp_comparison'],12))
+    print('Synthetic 1 kHz / 1 Vpp comparison (mV), 20k / 100k / 500k S/s:', ', '.join(f'{x:.3f}' for x in values))

@@ -20,7 +20,7 @@ typedef struct {
     void *context;
     uint8_t command[320], rx[16];
     volatile uint8_t transmitting;
-    uint8_t rx_size, page, paused, events, state, status_dirty, boot_sent;
+    uint8_t rx_size, page, paused, events, state, status_dirty, boot_sent, wave_initialized;
     uint16_t cursor;
     uint32_t now, tx_started, last_query, errors, tx_bytes, rx_bytes;
 } HmiProtocol;

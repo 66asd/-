@@ -77,10 +77,10 @@ static void packet(HmiProtocol *h)
         if(a[2]==SCOPE_HMI_AUTO_ID) { h->paused=0u; h->events|=HMI_EVENT_AUTO; h->status_dirty=1u; }
         else if(a[2]==SCOPE_HMI_STOP_ID) { h->paused^=1u; h->events|=HMI_EVENT_STOP; h->status_dirty=1u; }
     } else if(n==5u && a[0]==0x66u) {
-        if(h->page!=a[1]) { h->events|=HMI_EVENT_PAGE; h->status_dirty=1u; }
+        if(h->page!=a[1]) { h->events|=HMI_EVENT_PAGE; h->status_dirty=1u; h->wave_initialized=0u; }
         h->page=a[1];
     } else if(n==4u && a[0]==0x88u) {
-        h->page=255u; h->boot_sent=0u; h->events|=HMI_EVENT_PAGE;
+        h->page=255u; h->boot_sent=0u; h->wave_initialized=0u; h->events|=HMI_EVENT_PAGE;
     }
 }
 void HmiProtocol_Receive(HmiProtocol *h,uint8_t byte)
@@ -132,12 +132,13 @@ void HmiProtocol_Process(HmiProtocol *h,uint32_t now)
         }
         break;
     case VALUES:
-        if(values_command(h,&n) && transmit(h,h->command,(uint16_t)n)) h->state=CLEAR;
+        if(values_command(h,&n) && transmit(h,h->command,(uint16_t)n))
+            h->state=h->wave_initialized?DRAW:CLEAR;
         break;
     case CLEAR:
         if(append(h,&n,"cle %u,0",SCOPE_HMI_WAVE_A_ID) && append(h,&n,"cle %u,0",SCOPE_HMI_WAVE_B_ID)
             && overlays_command(h,&n)
-            && transmit(h,h->command,(uint16_t)n)) h->state=DRAW;
+            && transmit(h,h->command,(uint16_t)n)) { h->wave_initialized=1u; h->state=DRAW; }
         break;
     case DRAW:
         i=h->cursor;
@@ -160,6 +161,7 @@ void HmiProtocol_Process(HmiProtocol *h,uint32_t now)
         memset(h->command,255,3u); n=3u;
         if(append(h,&n,"page 3") && append(h,&n,"sendme") && transmit(h,h->command,(uint16_t)n)) {
             h->page=SCOPE_HMI_PAGE; h->boot_sent=1u; h->last_query=now; h->state=IDLE;
+            h->wave_initialized=0u;
         }
         break;
     default: h->state=RESYNC; break;

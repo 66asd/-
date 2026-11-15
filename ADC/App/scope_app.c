@@ -78,11 +78,19 @@ static void finish_trace(ScopeChannel *c, unsigned ch, uint32_t now)
     unsigned width = ch == 0u ? SCOPE_WAVE_A_WIDTH : SCOPE_WAVE_B_WIDTH;
     unsigned height = ch == 0u ? SCOPE_WAVE_A_HEIGHT : SCOPE_WAVE_B_HEIGHT;
     float vpp = c->frame_vpp, mean = c->frame_mean;
+    uint8_t used_fit=0u;
     if (c->measured_hz > 0.0f) {
-        if (c->fit.valid) { vpp = c->fit.amplitude * 2.0f; mean = c->fit.dc; }
+        vpp=Vpp_SelectCounts(c->frame_vpp,c->fit.amplitude*2.0f,c->fit.valid,
+                              c->measured_hz,c->frame_rate,&used_fit);
+        if (used_fit) mean=c->fit.dc;
         c->good_at = now;
     }
     if (!(c->frame_probe && c->valid && c->measured_hz==0.0f)) {
+        g_scope_diagnostics.raw_min[ch]=c->low;
+        g_scope_diagnostics.raw_max[ch]=c->high;
+        g_scope_diagnostics.vpp_raw_counts[ch]=c->frame_vpp;
+        g_scope_diagnostics.vpp_fit_counts[ch]=c->fit.amplitude*2.0f;
+        g_scope_diagnostics.vpp_used_fit[ch]=used_fit;
         c->mean=mean; c->ac_rms=c->frame_rms; c->peak_to_peak=vpp;
         (void)Waveform_Render(c->trace,c->count,c->frame_rate,c->measured_hz,
                               mean,vpp,pixels,(uint16_t)width,(uint16_t)height);
