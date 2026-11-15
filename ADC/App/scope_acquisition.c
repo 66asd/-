@@ -6,33 +6,12 @@ static volatile uint32_t dma_words[SCOPE_DMA_WORDS];
 static volatile uint32_t produced, fault;
 static uint32_t consumed, overruns, actual_rate;
 static uint8_t running;
-static uint8_t long_sampling;
-static uint16_t sample_cycles_x2=15u;
-
-static uint32_t sampling_time(uint32_t rate, int longer, uint16_t *cycles_x2)
-{
-    if(!longer || rate>200000u) { *cycles_x2=15u; return ADC_SAMPLETIME_7CYCLES_5; }
-    if(rate>100000u) { *cycles_x2=83u; return ADC_SAMPLETIME_41CYCLES_5; }
-    if(rate>20000u) { *cycles_x2=143u; return ADC_SAMPLETIME_71CYCLES_5; }
-    *cycles_x2=479u; return ADC_SAMPLETIME_239CYCLES_5;
-}
-uint16_t Acquisition_SampleCyclesX2(void) { return sample_cycles_x2; }
-int Acquisition_SetLongSampling(int enabled)
-{
-    uint16_t next;
-    long_sampling=(uint8_t)(enabled!=0);
-    (void)sampling_time(actual_rate,long_sampling,&next);
-    if(!running || next==sample_cycles_x2) return 1;
-    return Acquisition_SetRate(actual_rate);
-}
 
 uint32_t Acquisition_Rate(void) { return actual_rate; }
 int Acquisition_SetRate(uint32_t rate)
 {
     uint32_t clock = HAL_RCC_GetPCLK1Freq(), ticks;
     ADC_MultiModeTypeDef mode = {0};
-    ADC_ChannelConfTypeDef channel = {0};
-    uint16_t next_cycles;
     if ((RCC->CFGR & RCC_CFGR_PPRE1) != 0u) clock *= 2u;
     if (rate < 5000u || rate > SCOPE_SAMPLE_RATE_HZ) return 0;
     ticks = (clock + rate / 2u) / rate;
@@ -60,17 +39,6 @@ int Acquisition_SetRate(uint32_t rate)
     if (HAL_ADCEx_MultiModeConfigChannel(&hadc1,&mode) != HAL_OK) {
         HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn); return 0;
     }
-    /* Both sample windows stay equal, preserving dual-ADC relative phase. */
-    channel.Rank=ADC_REGULAR_RANK_1;
-    channel.SamplingTime=sampling_time(rate,long_sampling,&next_cycles);
-    channel.Channel=ADC_CHANNEL_0;
-    if(HAL_ADC_ConfigChannel(&hadc1,&channel)!=HAL_OK) {
-        HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn); return 0;
-    }
-    channel.Channel=ADC_CHANNEL_1;
-    if(HAL_ADC_ConfigChannel(&hadc2,&channel)!=HAL_OK) {
-        HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn); return 0;
-    }
     /* This F1 HAL Init leaves EXTTRIG clear; MultiModeStart only arms the master. */
     if (HAL_ADC_Start(&hadc2) != HAL_OK) {
         HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn); return 0;
@@ -83,14 +51,12 @@ int Acquisition_SetRate(uint32_t rate)
         (void)HAL_ADCEx_MultiModeStop_DMA(&hadc1); return 0;
     }
     actual_rate = clock / ticks;
-    sample_cycles_x2=next_cycles;
     running = 1u;
     return 1;
 }
 
 int Acquisition_Start(void)
 {
-    long_sampling=0u;
     if (HAL_TIM_Base_Stop(&htim3) != HAL_OK) return 0;
     if (running) {
         if (HAL_ADCEx_MultiModeStop_DMA(&hadc1) != HAL_OK) return 0;

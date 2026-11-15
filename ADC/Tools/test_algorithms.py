@@ -115,15 +115,3 @@ if 'test_real_comparison' in symbols:
         print(f'Recorded {seg}: Hz={hz:.6f}, robust={raw:.6f}, fitted={fitted:.6f}, '
               f'valid={valid:.0f}, residual={residual:.6f}, selected={selected:.6f}, '
               f'used_fit={used:.0f}, Vpp@3.19V={mv:.6f} mV')
-if 'test_small_comparison' in symbols:
-    values=struct.unpack('<4f',cpu.mem_read(symbols['test_small_comparison'],16))
-    print('Synthetic noisy 50/100 mV, 20k/100k S/s cycle averages (mV):', ', '.join(f'{v:.3f}' for v in values))
-if 'test_small_limits' in symbols:
-    limits=struct.unpack('<8f',cpu.mem_read(symbols['test_small_limits'],32))
-    print('Synthetic noisy sine phase-sweep ranges (mV):', ', '.join(f'{limits[i]:.3f}..{limits[i+1]:.3f}' for i in range(0,8,2)))
-if 'test_small_pipeline_limits' in symbols:
-    limits=struct.unpack('<4f',cpu.mem_read(symbols['test_small_pipeline_limits'],16))
-    print('Simulated HMI 50/100 mV across probe cycles:', ', '.join(f'{limits[i]:.0f}..{limits[i+1]:.0f} mV' for i in (0,2)))
-if 'test_large_pipeline_limits' in symbols:
-    limits=struct.unpack('<2f',cpu.mem_read(symbols['test_large_pipeline_limits'],8))
-    print(f'Simulated 1 V HMI with other-channel pickup: {limits[0]:.0f}..{limits[1]:.0f} mV')

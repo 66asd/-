@@ -15,7 +15,6 @@ DMA_HandleTypeDef hdma_adc1;
 static TIM_TypeDef timer;
 TIM_HandleTypeDef htim3={&timer,{0u,359u}};
 static uint32_t mode_value,calibrations,mode_restores,slave_starts;
-static uint32_t adc_sampling[2];
 static int timer_on,irq_enabled;
 static uint32_t *dma;
 static uint32_t copy[SCOPE_DMA_HALF_WORDS];
@@ -32,13 +31,6 @@ HAL_StatusTypeDef HAL_ADC_Start(ADC_HandleTypeDef *h)
     CHECK(h->Instance==ADC2 && mode_value==ADC_DUALMODE_REGSIMULT && !timer_on);
     h->Instance->CR2|=ADC_CR2_ADON|ADC_CR2_EXTTRIG;
     ++slave_starts; return HAL_OK;
-}
-HAL_StatusTypeDef HAL_ADC_ConfigChannel(ADC_HandleTypeDef *h,ADC_ChannelConfTypeDef *c)
-{
-    unsigned ch=h->Instance==ADC1?0u:1u;
-    CHECK(!timer_on && !(fake_adc1.CR2&ADC_CR2_ADON) && !(fake_adc2.CR2&ADC_CR2_ADON));
-    CHECK(c->Channel==ch && c->Rank==1u);
-    adc_sampling[ch]=c->SamplingTime; return HAL_OK;
 }
 HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *h)
 {
@@ -61,7 +53,6 @@ HAL_StatusTypeDef HAL_ADCEx_MultiModeStart_DMA(ADC_HandleTypeDef *h,uint32_t *p,
 {
     (void)h; CHECK(!hdma_adc1.busy && !timer_on && mode_value==ADC_DUALMODE_REGSIMULT);
     CHECK(n==1024u);
-    CHECK(adc_sampling[0]==adc_sampling[1]);
     CHECK((fake_adc2.CR2&(ADC_CR2_EXTTRIG|ADC_CR2_ADON))==(ADC_CR2_EXTTRIG|ADC_CR2_ADON));
     CHECK(!(fake_adc2.CR2&ADC_CR2_SWSTART));
     dma=p; hdma_adc1.busy=1;
@@ -97,17 +88,6 @@ void test_start(void)
     ++test_case; CHECK(!Acquisition_SetRate(1000000u) && timer_on);
     CHECK(!Acquisition_SetRate(0u) && timer_on);
     CHECK(Acquisition_Overruns()==7u && mode_restores==8u && slave_starts==8u);
-    ++test_case; CHECK(Acquisition_SetLongSampling(1));
-    CHECK(Acquisition_SampleCyclesX2()==15u);
-    for(i=0u;i<7u;++i) {
-        static const uint16_t expected[]={479u,479u,479u,143u,143u,83u,15u};
-        ++test_case; CHECK(Acquisition_SetRate(rates[i]));
-        CHECK(Acquisition_SampleCyclesX2()==expected[i] && adc_sampling[0]==expected[i]);
-        CHECK((expected[i]+25u+6u)*rates[i]<24000000u);
-        CHECK(timer_on);
-    }
-    ++test_case; CHECK(Acquisition_SetRate(20000u) && Acquisition_SampleCyclesX2()==479u);
-    CHECK(Acquisition_SetLongSampling(0) && Acquisition_SampleCyclesX2()==15u && timer_on);
     HAL_ADC_ErrorCallback(&hadc2); CHECK(Acquisition_HasFault());
     CHECK(Acquisition_Start()); CHECK(calibrations==4u && !Acquisition_HasFault());
     test_passed=1u; STOP(); for(;;){}

@@ -28,7 +28,6 @@ static uint8_t pixels[SCOPE_WAVE_A_WIDTH];
 static FrequencyMeter frequency;
 static RmsMeter rms;
 static VppMeter vpp;
-static VppCycleMeter cycle_vpp;
 static SineFit fit;
 static float generator_rate=200000.0f;
 static uint32_t random_state = 1234567u;
@@ -279,10 +278,9 @@ static void check_rate_policy(void)
 TestCoreDebug test_core_debug;
 TestDwt test_dwt;
 static uint32_t mock_rate, mock_index, next_block_us, mock_overruns;
-static float source_hz[2], source_phase[2],source_amplitude[2],source_noise[2],noise_phase[2];
+static float source_hz[2], source_phase[2],source_amplitude[2];
 static int mock_gap, start_failure, stalled;
 static uint32_t lowest_rate;
-static int mock_long_sampling;
 uint32_t HAL_GetTick(void) { return mock_tick; }
 void Error_Handler(void) { CHECK(0); }
 int Acquisition_SetRate(uint32_t rate)
@@ -294,19 +292,8 @@ int Acquisition_SetRate(uint32_t rate)
     return 1;
 }
 uint32_t Acquisition_Rate(void) { return mock_rate; }
-uint16_t Acquisition_SampleCyclesX2(void)
-{
-    return !mock_long_sampling || mock_rate>200000u?15u:mock_rate>100000u?83u:mock_rate>20000u?143u:479u;
-}
-int Acquisition_SetLongSampling(int enabled)
-{
-    uint16_t previous=Acquisition_SampleCyclesX2();
-    mock_long_sampling=enabled;
-    return previous==Acquisition_SampleCyclesX2() || Acquisition_SetRate(mock_rate);
-}
 int Acquisition_Start(void)
 {
-    mock_long_sampling=0;
     mock_rate=0u; mock_overruns=0u; mock_gap=0;
     lowest_rate=500000u;
     if(start_failure) return 0;
@@ -325,10 +312,7 @@ int Acquisition_CopyLatest(uint32_t *copy,uint32_t *first_index,int *gap)
     for(i=0u;i<SCOPE_DMA_HALF_WORDS;++i) {
         uint32_t word=0u;
         for(ch=0u;ch<2u;++ch) {
-            uint32_t x=(uint32_t)(2048.0f+source_amplitude[ch]*sinf(source_phase[ch])+
-                source_noise[ch]*sinf(noise_phase[ch])+(source_noise[ch]>0.0f?3.0f*noise():0.0f)+0.5f);
-            noise_phase[ch]+=6.28318530718f*137.0f/mock_rate;
-            if(noise_phase[ch]>=6.28318530718f) noise_phase[ch]-=6.28318530718f;
+            uint32_t x=(uint32_t)(2048.0f+source_amplitude[ch]*sinf(source_phase[ch])+0.5f);
             source_phase[ch]+=step[ch];
             if(source_phase[ch]>=6.28318530718f) source_phase[ch]-=6.28318530718f;
             word|=x<<(16u*ch);
@@ -359,7 +343,6 @@ static void begin_pipeline(float a,float b)
     mock_us=mock_tick=0u; tx_busy=0; source_hz[0]=a; source_hz[1]=b;
     source_phase[0]=0.31f; source_phase[1]=0.62f;
     source_amplitude[0]=source_amplitude[1]=1200.0f*3300.0f/SCOPE_REFERENCE_MV;
-    source_noise[0]=source_noise[1]=noise_phase[0]=noise_phase[1]=0.0f;
     return_rx=1; stalled=start_failure=0;
     CHECK(ScopeApp_Init());
 }
@@ -511,103 +494,10 @@ static void check_real_capture(unsigned which)
     CHECK(fit.residual_ratio>0.003f && fit.residual_ratio<0.005f);
 }
 
-volatile float test_small_comparison[4];
-volatile float test_small_limits[4][2],test_small_pipeline_limits[2][2];
-static void check_small_signal(unsigned mv, unsigned fs, unsigned shape)
-{
-    unsigned i,p;
-    float amplitude=(float)mv*4095.0f/3190.0f/2.0f;
-    for(p=0u;p<5u;++p) {
-        float measured,span;
-        Vpp_Reset(&vpp); Rms_Reset(&rms);
-        CHECK(VppCycle_Start(&cycle_vpp,1024u,1000.0f,(float)fs));
-        for(i=0u;i<1024u;++i) {
-            float a=6.28318530718f*1000.0f*i/fs+0.137f*p;
-            float y=sinf(a);
-            if(shape==1u) y=y>=0.0f?1.0f:-1.0f;
-            else if(shape==2u) y=2.0f/3.14159265359f*asinf(y);
-            samples[i]=(uint16_t)(2118.0f+amplitude*y+
-                20.0f*sinf(6.28318530718f*137.0f*i/fs+0.7f*p)+3.0f*noise()+0.5f);
-            if(i==601u) samples[i]=4095u;
-            if(i==701u) samples[i]=0u;
-            Vpp_Push(&vpp,samples[i]); Rms_Push(&rms,samples[i]);
-            VppCycle_Push(&cycle_vpp,samples[i]);
-        }
-        span=Vpp_RobustCounts(&vpp);
-        measured=VppCycle_Result(&cycle_vpp)*3190.0f/4095.0f;
-        test_details[0]=(float)mv; test_details[1]=(float)fs;
-        test_details[2]=span*3190.0f/4095.0f; test_details[3]=measured;
-        CHECK(fabsf(measured-mv)<(shape==2u?10.0f:4.0f));
-        if(shape==0u) {
-            unsigned result=(mv==50u?0u:2u)+(fs==100000u);
-            test_small_comparison[result]=measured;
-            if(p==0u || measured<test_small_limits[result][0]) test_small_limits[result][0]=measured;
-            if(p==0u || measured>test_small_limits[result][1]) test_small_limits[result][1]=measured;
-        }
-    }
-}
-static void check_small_pipeline(void)
-{
-    unsigned i,t;
-    begin_pipeline(1000.0f,1000.0f);
-    source_amplitude[0]=25.0f*4095.0f/SCOPE_REFERENCE_MV;
-    source_amplitude[1]=50.0f*4095.0f/SCOPE_REFERENCE_MV;
-    source_noise[0]=source_noise[1]=20.0f;
-    run_ms(2000u);
-    for(t=0u;t<25u;++t) {
-        run_ms(100u);
-        for(i=0u;i<2u;++i) {
-            unsigned target=i==0u?50u:100u;
-            HmiReading *r=&hmi.snapshot.reading[i];
-            test_details[0]=(float)target; test_details[1]=(float)r->vpp_mv;
-            test_details[2]=r->frequency_tenths/10.0f;
-            CHECK(r->frequency_valid && fabsf(r->frequency_tenths/10.0f-1000.0f)<15.0f);
-            CHECK(fabsf((float)r->vpp_mv-target)<6.0f);
-            if(t==0u || r->vpp_mv<test_small_pipeline_limits[i][0]) test_small_pipeline_limits[i][0]=(float)r->vpp_mv;
-            if(t==0u || r->vpp_mv>test_small_pipeline_limits[i][1]) test_small_pipeline_limits[i][1]=(float)r->vpp_mv;
-        }
-    }
-    CHECK(mock_long_sampling);
-}
-volatile float test_large_pipeline_limits[2];
-static void check_large_with_pickup(void)
-{
-    unsigned t;
-    begin_pipeline(1000.0f,0.0f);
-    source_noise[0]=40.0f; source_noise[1]=20.0f;
-    source_amplitude[0]=500.0f*4095.0f/SCOPE_REFERENCE_MV;
-    source_amplitude[1]=0.0f;
-    run_ms(2000u);
-    for(t=0u;t<25u;++t) {
-        HmiReading *r;
-        run_ms(100u); r=&hmi.snapshot.reading[0];
-        test_details[0]=(float)r->vpp_mv;
-        test_details[1]=(float)mock_long_sampling;
-        test_details[2]=(float)Acquisition_SampleCyclesX2();
-        CHECK(!mock_long_sampling && Acquisition_SampleCyclesX2()==15u);
-        CHECK(r->frequency_valid && fabsf((float)r->vpp_mv-1000.0f)<15.0f);
-        if(t==0u || r->vpp_mv<test_large_pipeline_limits[0]) test_large_pipeline_limits[0]=(float)r->vpp_mv;
-        if(t==0u || r->vpp_mv>test_large_pipeline_limits[1]) test_large_pipeline_limits[1]=(float)r->vpp_mv;
-    }
-}
-
 void test_start(void)
 {
     static const float hz[]={50,75,100,150,200,300,500,750,1000,1500,2000,3000,8000,40000,80000,120000,125000,150000};
     unsigned i,phase;
-    ++test_case; check_large_with_pickup();
-    ++test_case;
-    Vpp_Reset(&vpp);
-    for(i=0u;i<1024u;++i) Vpp_Push(&vpp,(uint16_t)(2040u+i%64u));
-    test_details[0]=Vpp_RobustCounts(&vpp);
-    CHECK(test_details[0]==63.0f);
-    for(i=0u;i<3u;++i) {
-        ++test_case; check_small_signal(50u,20000u,i);
-        ++test_case; check_small_signal(100u,20000u,i);
-        ++test_case; check_small_signal(50u,100000u,i);
-        ++test_case; check_small_signal(100u,100000u,i);
-    }
-    ++test_case; check_small_pipeline();
     for(i=0u;i<2u;++i) { ++test_case; check_real_capture(i); }
     for(i=0u;i<2u;++i) { ++test_case; check_distorted_sine(i); }
     for(i=0u;i<sizeof(hz)/sizeof(hz[0]);++i) {

@@ -11,13 +11,11 @@
 #include "main.h"
 #include <string.h>
 
-enum { CAPTURE, MOMENTS, PERIODS, REFINE, CYCLE, FIT };
+enum { CAPTURE, MOMENTS, PERIODS, FIT };
 typedef struct {
     FrequencyMeter frequency;
-    FrequencyRefiner refiner;
     RmsMeter rms;
     VppMeter vpp;
-    VppCycleMeter cycle;
     SineFit fit;
     uint16_t trace[SCOPE_TRACE_SAMPLES];
     uint16_t count, work, stride, countdown, search_stride;
@@ -25,20 +23,18 @@ typedef struct {
     uint16_t low, high;
     uint32_t good_at;
     float hz, mean, ac_rms, peak_to_peak, frame_rate, measured_hz;
-    float frame_mean, frame_rms, frame_vpp, cycle_vpp;
+    float frame_mean, frame_rms, frame_vpp;
 } ScopeChannel;
 static ScopeChannel channels[2];
 static uint32_t raw_copy[SCOPE_DMA_HALF_WORDS], last_display, last_probe;
 static SampleRatePolicy rate_policy;
 static HmiSnapshot display;
 static uint8_t probing, probe_done;
-static uint8_t long_sampling;
 volatile ScopeDiagnostics g_scope_diagnostics;
 
 static void reset_capture(ScopeChannel *c)
 {
     c->state = CAPTURE; c->count = c->work = c->countdown = 0u;
-    c->cycle_vpp=0.0f;
     c->low = 4095u; c->high = 0u;
 }
 static int change_rate(uint32_t rate)
@@ -84,26 +80,18 @@ static void finish_trace(ScopeChannel *c, unsigned ch, uint32_t now)
     unsigned height = ch == 0u ? SCOPE_WAVE_A_HEIGHT : SCOPE_WAVE_B_HEIGHT;
     float vpp = c->frame_vpp, mean = c->frame_mean;
     uint8_t used_fit=0u;
-    uint8_t used_cycle=0u;
     if (c->measured_hz > 0.0f) {
         vpp=Vpp_SelectCounts(c->frame_vpp,c->fit.amplitude*2.0f,c->fit.valid,
                               c->measured_hz,c->frame_rate,&used_fit);
         if (used_fit) mean=c->fit.dc;
-        if(c->cycle_vpp>0.0f) { vpp=c->cycle_vpp; used_cycle=1u; used_fit=0u; }
         c->good_at = now;
     }
-    if (!(c->frame_probe && c->valid &&
-          (c->measured_hz==0.0f || (c->peak_to_peak>0.0f &&
-           (float)c->count*c->measured_hz<c->frame_rate*8.0f)))) {
+    if (!(c->frame_probe && c->valid && c->measured_hz==0.0f)) {
         g_scope_diagnostics.raw_min[ch]=c->low;
         g_scope_diagnostics.raw_max[ch]=c->high;
         g_scope_diagnostics.vpp_raw_counts[ch]=c->frame_vpp;
         g_scope_diagnostics.vpp_fit_counts[ch]=c->fit.amplitude*2.0f;
         g_scope_diagnostics.vpp_used_fit[ch]=used_fit;
-        g_scope_diagnostics.vpp_fit_valid[ch]=c->fit.valid;
-        g_scope_diagnostics.vpp_fit_residual_ratio[ch]=c->fit.residual_ratio;
-        g_scope_diagnostics.vpp_cycle_counts[ch]=c->cycle_vpp;
-        g_scope_diagnostics.vpp_used_cycle[ch]=used_cycle;
         c->mean=mean; c->ac_rms=c->frame_rms; c->peak_to_peak=vpp;
         (void)Waveform_Render(c->trace,c->count,c->frame_rate,c->measured_hz,
                               mean,vpp,pixels,(uint16_t)width,(uint16_t)height);
@@ -154,27 +142,8 @@ static void analyze(ScopeChannel *c, unsigned ch, uint32_t now)
                 if (max_stride < 1u) max_stride = 1u;
                 c->search_stride = (uint16_t)(next > max_stride ? max_stride : next);
             }
-            if(c->frame_vpp<=256.0f && VppCycle_Start(&c->cycle,c->count,c->measured_hz,c->frame_rate)) {
-                FrequencyRefine_Start(&c->refiner,c->count,c->measured_hz,c->frame_rate);
-                c->work=0u; c->state=REFINE;
-            } else {
-                SineFit_Start(&c->fit,c->trace,c->count,c->frame_rate,c->measured_hz);
-                c->state=FIT;
-            }
-        }
-    } else if(c->state==REFINE) {
-        while(budget-- && c->work<c->count) FrequencyRefine_Push(&c->refiner,c->trace[c->work++]);
-        if(c->work==c->count) {
-            c->measured_hz=FrequencyRefine_Result(&c->refiner); c->hz=c->measured_hz;
-            (void)VppCycle_Start(&c->cycle,c->count,c->measured_hz,c->frame_rate);
-            c->work=0u; c->state=CYCLE;
-        }
-    } else if(c->state==CYCLE) {
-        while(budget-- && c->work<c->count) VppCycle_Push(&c->cycle,c->trace[c->work++]);
-        if(c->work==c->count) {
-            c->cycle_vpp=VppCycle_Result(&c->cycle);
             SineFit_Start(&c->fit,c->trace,c->count,c->frame_rate,c->measured_hz);
-            c->state=FIT;
+            c->state = FIT;
         }
     } else if (SineFit_Step(&c->fit,24u)) finish_trace(c,ch,now);
 }
@@ -191,7 +160,6 @@ int ScopeApp_Init(void)
     memset(display.b,SCOPE_WAVE_B_HEIGHT/2u,sizeof(display.b));
     memset(&rate_policy,0,sizeof(rate_policy));
     probing=1u; probe_done=0u; last_probe=last_display=HAL_GetTick();
-    long_sampling=0u;
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CYCCNT=0u; DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     if (!HmiUart_Init()) return 0;
@@ -225,23 +193,6 @@ void ScopeApp_Process(void)
                 (channels[0].active&&!channels[0].valid)||(channels[1].active&&!channels[1].valid),now);
             if(target!=Acquisition_Rate()) (void)change_rate(target);
         }
-        {
-            uint8_t request=0u,large=0u;
-            float threshold=(long_sampling?200.0f:150.0f)*SCOPE_ADC_FULL_SCALE/SCOPE_REFERENCE_MV;
-            for(i=0u;i<2u;++i)
-                if(channels[i].valid && channels[i].peak_to_peak>=20.0f) {
-                    if(channels[i].peak_to_peak<threshold) request=1u;
-                    else large=1u;
-                }
-            if(large) request=0u;
-            if(request!=long_sampling) {
-                if(!Acquisition_SetLongSampling(request)) g_scope_diagnostics.adc_fault=1u;
-                else {
-                    long_sampling=request;
-                    for(i=0u;i<2u;++i) reset_capture(&channels[i]);
-                }
-            }
-        }
         if(Acquisition_HasFault()) g_scope_diagnostics.adc_fault=1u;
     }
     if(!VofaRaw_Enabled() && HmiProtocol_CanSubmit(h) && (uint32_t)(now-last_display)>=SCOPE_DISPLAY_INTERVAL_MS) {
@@ -255,7 +206,6 @@ void ScopeApp_Process(void)
         if(HmiProtocol_Submit(h,&display)) { last_display=now; ++g_scope_diagnostics.displayed_frames; }
     }
     g_scope_diagnostics.sample_rate_hz=Acquisition_Rate();
-    g_scope_diagnostics.adc_sample_cycles_x2=Acquisition_SampleCyclesX2();
     g_scope_diagnostics.dma_overruns=Acquisition_Overruns();
     g_scope_diagnostics.hmi_errors=h->errors; g_scope_diagnostics.hmi_page=h->page;
     g_scope_diagnostics.uart_tx_bytes=h->tx_bytes; g_scope_diagnostics.uart_rx_bytes=h->rx_bytes;
