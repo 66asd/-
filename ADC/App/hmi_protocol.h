@@ -20,9 +20,9 @@ typedef struct {
     void *context;
     uint8_t command[320], rx[16];
     volatile uint8_t transmitting;
-    uint8_t rx_size, page, paused, events, state, channel, status_dirty, failed;
-    uint32_t ready_count, done_count, ready_before, done_before;
-    uint32_t deadline, last_query, errors;
+    uint8_t rx_size, page, paused, events, state, status_dirty, boot_sent;
+    uint16_t cursor;
+    uint32_t now, tx_started, last_query, errors, tx_bytes, rx_bytes;
 } HmiProtocol;
 void HmiProtocol_Init(HmiProtocol *h, HmiSend send, void *context, uint32_t now);
 void HmiProtocol_Receive(HmiProtocol *h, uint8_t byte);

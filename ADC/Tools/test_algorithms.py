@@ -10,16 +10,19 @@ import os
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
 BUILD.mkdir(exist_ok=True)
-sources = ['measure_frequency.c', 'measure_rms.c', 'measure_vpp.c',
-           'sine_fit.c', 'scope_waveform.c', 'hmi_protocol.c', 'scope_app.c']
-elf = BUILD / 'algorithm-tests.elf'
+acquisition_test = '--acquisition' in sys.argv
+sources = ['scope_acquisition.c'] if acquisition_test else ['measure_frequency.c', 'measure_rms.c', 'measure_vpp.c',
+           'sine_fit.c', 'scope_waveform.c', 'hmi_protocol.c', 'scope_app.c', 'sample_rate.c']
+test_source = ROOT / ('Tests/test_acquisition.c' if acquisition_test else 'Tests/test_algorithms.c')
+fake_includes = ROOT / ('Tests/acquisition_fakes' if acquisition_test else 'Tests/fakes')
+elf = BUILD / ('acquisition-tests.elf' if acquisition_test else 'algorithm-tests.elf')
 keil = Path(os.environ.get('KEIL_ROOT', 'D:/keil5')) / 'ARM/ARMCC/bin'
 if (keil / 'armcc.exe').exists():
     objects = []
-    for source in [ROOT / 'Tests/test_algorithms.c'] + [ROOT / 'App' / name for name in sources]:
+    for source in [test_source] + [ROOT / 'App' / name for name in sources]:
         obj = BUILD / ('test-' + source.stem + '.o')
         subprocess.run([str(keil / 'armcc.exe'), '--cpu=Cortex-M3', '--c99', '-O2', '-g',
-                        '--split_sections', '--diag_error=warning', '-I' + str(ROOT / 'Tests/fakes'),
+                        '--split_sections', '--diag_error=warning', '-I' + str(fake_includes),
                         '-I' + str(ROOT / 'App'),
                         '-c', str(source), '-o', str(obj)], check=True)
         objects.append(str(obj))
@@ -35,9 +38,9 @@ else:
         raise SystemExit('Keil ARMCC or arm-none-eabi-gcc is required')
     cmd = [gcc, '-mcpu=cortex-m3', '-mthumb', '-O2', '-g', '-std=c99',
            '-Wall', '-Wextra', '-Werror', '-ffunction-sections', '-fdata-sections',
-           '-I' + str(ROOT / 'Tests/fakes'), '-I' + str(ROOT / 'App'), '-nostartfiles', '--specs=nosys.specs',
+           '-I' + str(fake_includes), '-I' + str(ROOT / 'App'), '-nostartfiles', '--specs=nosys.specs',
            '-Wl,--gc-sections', '-T' + str(ROOT / 'Tests/test_memory.ld'),
-           str(ROOT / 'Tests/test_algorithms.c')]
+           str(test_source)]
     cmd += [str(ROOT / 'App' / name) for name in sources]
     cmd += ['-lm', '-o', str(elf)]
     subprocess.run(cmd, check=True)
@@ -82,9 +85,10 @@ started = time.monotonic()
 cpu.emu_start(entry | 1, 0, timeout=240_000_000)
 def word(name):
     return struct.unpack('<I', cpu.mem_read(symbols[name], 4))[0]
-details = struct.unpack('<8f', cpu.mem_read(symbols['test_details'], 32))
+details = struct.unpack('<8f', cpu.mem_read(symbols['test_details'], 32)) if 'test_details' in symbols else ()
 print(f'Cortex-M3 C tests: cases={word("test_case")}, elapsed={time.monotonic()-started:.1f}s')
 if not stopped or not word('test_passed'):
     print(f'FAILED line={word("test_failed_line")} details={details}')
     sys.exit(1)
-print('PASS: frequency, AC RMS, robust/model VPP, waveform, HMI protocol and dual-rate application pipeline')
+print('PASS: timer/DMA bootstrap, dual mode restore, all rates and packed samples' if acquisition_test else
+      'PASS: frequency, AC RMS, robust/model VPP, waveform, asynchronous HMI and dynamic-rate application pipeline')

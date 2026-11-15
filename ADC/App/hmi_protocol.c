@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-enum { IDLE, CLEAR, ADDT, WAIT_READY, DATA, WAIT_DONE, VALUES, RESYNC };
+enum { IDLE, VALUES, CLEAR, DRAW, REFRESH, RESYNC };
 
 static int append(HmiProtocol *h, unsigned *used, const char *format, ...)
 {
@@ -22,7 +22,8 @@ static int transmit(HmiProtocol *h, const uint8_t *data, uint16_t size)
 {
     /* Set before calling the port: even an immediate completion is safe. */
     h->transmitting = 1u;
-    if (h->send(h->context, data, size)) return 1;
+    h->tx_started = h->now;
+    if (h->send(h->context, data, size)) { h->tx_bytes += size; return 1; }
     h->transmitting = 0u;
     return 0;
 }
@@ -34,7 +35,6 @@ static int status_command(HmiProtocol *h, unsigned *used)
 static int values_command(HmiProtocol *h, unsigned *used)
 {
     static const uint8_t fields[2][3] = {{1u,3u,5u},{7u,9u,11u}};
-    static const char * const overlays[] = {"t0","t2","t4","t6","t8","t10","b0","b1","b2"};
     unsigned ch;
     for (ch = 0u; ch < 2u; ++ch) {
         const HmiReading *r = &h->snapshot.reading[ch];
@@ -52,143 +52,116 @@ static int values_command(HmiProtocol *h, unsigned *used)
         if (!append(h, used, "t%u.txt=\"%lu.%03luV\"", fields[ch][2],
                     (unsigned long)(r->vpp_mv / 1000u), (unsigned long)(r->vpp_mv % 1000u))) return 0;
     }
-    if (!status_command(h, used)) return 0;
-    /* Existing HMI labels/buttons overlap the waveform rectangles. */
-    for (ch = 0u; ch < sizeof(overlays)/sizeof(overlays[0]); ++ch)
-        if (!append(h, used, "ref %s", overlays[ch])) return 0;
+    return status_command(h, used);
+}
+
+static int overlays_command(HmiProtocol *h, unsigned *used)
+{
+    static const char * const names[]={"t0","t2","t4","t6","t8","t10","b0","b1","b2"};
+    unsigned i;
+    for(i=0u;i<sizeof(names)/sizeof(names[0]);++i)
+        if(!append(h,used,"ref %s",names[i])) return 0;
     return 1;
 }
 void HmiProtocol_Init(HmiProtocol *h, HmiSend send, void *context, uint32_t now)
 {
-    memset(h, 0, sizeof(*h));
-    h->send = send; h->context = context; h->page = 255u;
-    h->last_query = now - 1000u;
+    memset(h,0,sizeof(*h)); h->send=send; h->context=context;
+    h->page=255u; h->now=now; h->last_query=now;
 }
 static void packet(HmiProtocol *h)
 {
-    const uint8_t *a = h->rx;
-    unsigned n = h->rx_size;
-    if (n == 7u && a[0] == 0x65u && a[1] == SCOPE_HMI_PAGE && a[3] == 0u) {
-        h->page = SCOPE_HMI_PAGE;
-        if (a[2] == SCOPE_HMI_AUTO_ID) {
-            h->paused = 0u;
-            h->events |= HMI_EVENT_AUTO;
-            h->status_dirty = 1u;
-        } else if (a[2] == SCOPE_HMI_STOP_ID) {
-            h->paused ^= 1u;
-            h->events |= HMI_EVENT_STOP;
-            h->status_dirty = 1u;
-        }
-    } else if (n == 5u && a[0] == 0x66u) {
-        if (h->page != a[1]) { h->events |= HMI_EVENT_PAGE; h->status_dirty = 1u; }
-        h->page = a[1];
-    } else if (n == 4u && a[0] == 0xfeu) ++h->ready_count;
-    else if (n == 4u && a[0] == 0xfdu) ++h->done_count;
-    else if (n == 4u && a[0] == 0x88u) {
-        h->page = 255u;
-        h->events |= HMI_EVENT_PAGE;
+    const uint8_t *a=h->rx;
+    unsigned n=h->rx_size;
+    if(n==7u && a[0]==0x65u && a[1]==SCOPE_HMI_PAGE && a[3]==0u) {
+        h->page=SCOPE_HMI_PAGE;
+        if(a[2]==SCOPE_HMI_AUTO_ID) { h->paused=0u; h->events|=HMI_EVENT_AUTO; h->status_dirty=1u; }
+        else if(a[2]==SCOPE_HMI_STOP_ID) { h->paused^=1u; h->events|=HMI_EVENT_STOP; h->status_dirty=1u; }
+    } else if(n==5u && a[0]==0x66u) {
+        if(h->page!=a[1]) { h->events|=HMI_EVENT_PAGE; h->status_dirty=1u; }
+        h->page=a[1];
+    } else if(n==4u && a[0]==0x88u) {
+        h->page=255u; h->boot_sent=0u; h->events|=HMI_EVENT_PAGE;
     }
 }
-void HmiProtocol_Receive(HmiProtocol *h, uint8_t byte)
+void HmiProtocol_Receive(HmiProtocol *h,uint8_t byte)
 {
     unsigned n;
-    if (h->rx_size >= sizeof(h->rx)) {
-        h->rx_size = 0u;
-        ++h->errors;
-    }
-    h->rx[h->rx_size++] = byte;
-    n = h->rx_size;
-    if (n >= 3u && h->rx[n-1u] == 255u && h->rx[n-2u] == 255u && h->rx[n-3u] == 255u) {
-        packet(h);
-        h->rx_size = 0u;
+    ++h->rx_bytes;
+    if(h->rx_size>=sizeof(h->rx)) { h->rx_size=0u; ++h->errors; }
+    h->rx[h->rx_size++]=byte; n=h->rx_size;
+    if(n>=3u && h->rx[n-1u]==255u && h->rx[n-2u]==255u && h->rx[n-3u]==255u) {
+        packet(h); h->rx_size=0u;
     }
 }
 int HmiProtocol_CanSubmit(const HmiProtocol *h)
 {
-    return h->state == IDLE && !h->transmitting && !h->paused && h->page == SCOPE_HMI_PAGE;
+    return h->boot_sent && h->state==IDLE && !h->transmitting && !h->paused && h->page==SCOPE_HMI_PAGE;
 }
-int HmiProtocol_Submit(HmiProtocol *h, const HmiSnapshot *snapshot)
+int HmiProtocol_Submit(HmiProtocol *h,const HmiSnapshot *snapshot)
 {
-    if (!HmiProtocol_CanSubmit(h)) return 0;
-    h->snapshot = *snapshot;
-    h->channel = h->failed = 0u;
-    h->state = CLEAR;
-    return 1;
+    if(!HmiProtocol_CanSubmit(h)) return 0;
+    h->snapshot=*snapshot; h->cursor=0u; h->state=VALUES; return 1;
 }
-void HmiProtocol_TxComplete(HmiProtocol *h) { h->transmitting = 0u; }
+void HmiProtocol_TxComplete(HmiProtocol *h) { h->transmitting=0u; }
 void HmiProtocol_TransportError(HmiProtocol *h)
 {
-    h->transmitting = 0u;
-    ++h->errors;
-    /* A transport failure may leave the display waiting for raw bytes. */
-    if (h->state == WAIT_READY || h->state == WAIT_DONE) {
-        h->failed = 1u;
-        h->state = DATA;
-    } else h->state = RESYNC;
+    h->transmitting=0u; ++h->errors; h->state=RESYNC;
 }
 uint8_t HmiProtocol_TakeEvents(HmiProtocol *h)
 {
-    uint8_t events = h->events;
-    h->events = 0u;
-    return events;
+    uint8_t e=h->events; h->events=0u; return e;
 }
-void HmiProtocol_Process(HmiProtocol *h, uint32_t now)
+void HmiProtocol_Process(HmiProtocol *h,uint32_t now)
 {
-    unsigned n = 0u;
-    unsigned id = h->channel == 0u ? SCOPE_HMI_WAVE_A_ID : SCOPE_HMI_WAVE_B_ID;
-    unsigned width = h->channel == 0u ? SCOPE_WAVE_A_WIDTH : SCOPE_WAVE_B_WIDTH;
-    if (h->transmitting) return;
-    switch (h->state) {
+    unsigned n=0u, i;
+    h->now=now;
+    if(h->transmitting) return;
+    if((h->paused || h->page!=SCOPE_HMI_PAGE) && h->state!=IDLE && h->state!=RESYNC)
+        h->state=REFRESH;
+    switch(h->state) {
     case IDLE:
-        if (h->status_dirty && h->page == SCOPE_HMI_PAGE) {
-            if (status_command(h, &n) && transmit(h, h->command, (uint16_t)n)) h->status_dirty = 0u;
-        } else if ((uint32_t)(now - h->last_query) >= 1000u) {
-            if (append(h, &n, "sendme") && transmit(h, h->command, (uint16_t)n)) h->last_query = now;
-        }
-        break;
-    case CLEAR:
-        if (h->page != SCOPE_HMI_PAGE) { h->state = IDLE; break; }
-        if (append(h, &n, "cle %u,0", id) && transmit(h, h->command, (uint16_t)n)) h->state = ADDT;
-        break;
-    case ADDT:
-        h->ready_before = h->ready_count;
-        if (append(h, &n, "addt %u,0,%u", id, width) && transmit(h, h->command, (uint16_t)n)) {
-            h->state = WAIT_READY; h->deadline = now + 500u;
-        }
-        break;
-    case WAIT_READY:
-        if (h->ready_count != h->ready_before) h->state = DATA;
-        else if ((int32_t)(now - h->deadline) >= 0) {
-            ++h->errors; h->failed = 1u; h->state = DATA;
-        }
-        break;
-    case DATA:
-        h->done_before = h->done_count;
-        if (transmit(h, h->channel == 0u ? h->snapshot.a : h->snapshot.b, (uint16_t)width)) {
-            h->state = WAIT_DONE; h->deadline = now + 500u;
-        }
-        break;
-    case WAIT_DONE:
-        if (h->done_count != h->done_before) {
-            if (h->failed) h->state = RESYNC;
-            else if (h->channel == 0u) { h->channel = 1u; h->state = CLEAR; }
-            else h->state = VALUES;
-        } else if ((int32_t)(now - h->deadline) >= 0) {
-            ++h->errors; h->state = RESYNC;
+        /* Enter the requested measurement page once; output does not depend on RX acknowledgements. */
+        if(!h->boot_sent && (uint32_t)(now-h->last_query)>=800u) {
+            if(append(h,&n,"page 3") && append(h,&n,"sendme") && transmit(h,h->command,(uint16_t)n)) {
+                h->boot_sent=1u; h->page=SCOPE_HMI_PAGE; h->last_query=now;
+            }
+        } else if(h->status_dirty && h->page==SCOPE_HMI_PAGE) {
+            if(status_command(h,&n) && transmit(h,h->command,(uint16_t)n)) h->status_dirty=0u;
+        } else if(h->boot_sent && (uint32_t)(now-h->last_query)>=1000u) {
+            if(append(h,&n,"sendme") && transmit(h,h->command,(uint16_t)n)) h->last_query=now;
         }
         break;
     case VALUES:
-        if (h->page != SCOPE_HMI_PAGE) { h->state = IDLE; break; }
-        if (values_command(h, &n) && transmit(h, h->command, (uint16_t)n)) {
-            h->status_dirty = 0u; h->state = IDLE;
+        if(values_command(h,&n) && transmit(h,h->command,(uint16_t)n)) h->state=CLEAR;
+        break;
+    case CLEAR:
+        if(append(h,&n,"cle %u,0",SCOPE_HMI_WAVE_A_ID) && append(h,&n,"cle %u,0",SCOPE_HMI_WAVE_B_ID)
+            && overlays_command(h,&n)
+            && transmit(h,h->command,(uint16_t)n)) h->state=DRAW;
+        break;
+    case DRAW:
+        i=h->cursor;
+        /* Four point pairs per packet: bounded stop latency, no transparent-mode handshake. */
+        while(i<h->cursor+4u && i<SCOPE_WAVE_A_WIDTH) {
+            if(!append(h,&n,"add %u,0,%u",SCOPE_HMI_WAVE_A_ID,h->snapshot.a[i])) return;
+            if(i<SCOPE_WAVE_B_WIDTH && !append(h,&n,"add %u,0,%u",SCOPE_HMI_WAVE_B_ID,h->snapshot.b[i])) return;
+            ++i;
         }
+        if(transmit(h,h->command,(uint16_t)n)) {
+            h->cursor=(uint16_t)i;
+            if(i==SCOPE_WAVE_A_WIDTH) h->state=REFRESH;
+        }
+        break;
+    case REFRESH:
+        if(h->page!=SCOPE_HMI_PAGE) h->state=IDLE;
+        else if(overlays_command(h,&n) && transmit(h,h->command,(uint16_t)n)) h->state=IDLE;
         break;
     case RESYNC:
-        memset(h->command, 255, 3u); n = 3u;
-        if (append(h, &n, "sendme") && transmit(h, h->command, (uint16_t)n)) {
-            h->page = 255u; h->last_query = now; h->state = IDLE;
+        memset(h->command,255,3u); n=3u;
+        if(append(h,&n,"page 3") && append(h,&n,"sendme") && transmit(h,h->command,(uint16_t)n)) {
+            h->page=SCOPE_HMI_PAGE; h->boot_sent=1u; h->last_query=now; h->state=IDLE;
         }
         break;
-    default: h->state = RESYNC; break;
+    default: h->state=RESYNC; break;
     }
 }

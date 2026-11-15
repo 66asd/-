@@ -1,14 +1,15 @@
 #ifndef SCOPE_CONFIG_H
 #define SCOPE_CONFIG_H
 
-#define SCOPE_SAMPLE_RATE_HZ       200000u
-#define SCOPE_MIN_FREQUENCY_HZ     100u
-#define SCOPE_MAX_FREQUENCY_HZ     40000u
+#define SCOPE_SAMPLE_RATE_HZ       500000u /* Maximum and acquisition-search rate. */
+#define SCOPE_MIN_FREQUENCY_HZ     50u
+#define SCOPE_TARGET_POINTS        64u
+#define SCOPE_PROBE_INTERVAL_MS    1000u
+#define SCOPE_RATE_HOLD_MS         300u
 #define SCOPE_REFERENCE_MV         3300u /* Measure VDDA and calibrate this value. */
 #define SCOPE_ADC_FULL_SCALE       4095u
 #define SCOPE_DMA_WORDS            1024u
 #define SCOPE_DMA_HALF_WORDS       (SCOPE_DMA_WORDS / 2u)
-#define SCOPE_MEASURE_SAMPLES      10000u
 #define SCOPE_TRACE_SAMPLES        1024u
 #define SCOPE_DISPLAY_CYCLES       4u
 #define SCOPE_DISPLAY_INTERVAL_MS  150u

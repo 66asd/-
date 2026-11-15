@@ -20,6 +20,7 @@ int HmiUart_Init(void)
 HmiProtocol *HmiUart_Protocol(void) { return &protocol; }
 void HmiUart_Process(void)
 {
+    if (protocol.transmitting && (uint32_t)(HAL_GetTick()-protocol.tx_started)>200u) port_error=1u;
     if (port_error) {
         uint32_t mask = __get_PRIMASK();
         __disable_irq();

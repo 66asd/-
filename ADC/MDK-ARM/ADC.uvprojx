@@ -384,6 +384,11 @@
           <GroupName>Scope Application</GroupName>
           <Files>
             <File>
+              <FileName>sample_rate.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/sample_rate.c</FilePath>
+            </File>
+            <File>
               <FileName>hmi_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/hmi_protocol.c</FilePath>

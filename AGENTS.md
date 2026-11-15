@@ -1,6 +1,6 @@
 # Project instructions
 
-- Project: STM32F103C8T6 dual ADC oscilloscope, 200 kS/s per channel, 100 Hz to 40 kHz.
+- Project: STM32F103C8T6 dual ADC oscilloscope, adaptive 5 to 500 kS/s per channel, nominal input 50 Hz to 120 kHz (no 120 kHz software cutoff).
 - Do not modify any HMI file. Use the current `DualDDS2.HMI` page3 definitions.
 - Keep acquisition, frequency, AC RMS, VPP, waveform and HMI protocol in separate modules.
 - Preserve CubeMX USER CODE sections and add application sources to the Keil project.

@@ -97,7 +97,7 @@ for key, value in {
 }.items():
     assert ioc[key] == value, f'Incorrect CubeMX setting: {key}'
 assert ioc['NVIC.USART1_IRQn'].startswith('true')
-assert int(ioc['RCC.APB1TimFreq_Value']) // (int(ioc['TIM3.Prescaler'])+1) // (int(ioc['TIM3.Period'])+1) == 200000
+assert int(ioc['RCC.APB1TimFreq_Value']) // (int(ioc['TIM3.Prescaler'])+1) // (int(ioc['TIM3.Period'])+1) == 500000
 project = ET.parse(ROOT/'MDK-ARM/ADC.uvprojx')
 paths = [p.text.replace('\\','/') for p in project.findall('.//FilePath')]
 for source in sorted((ROOT/'App').glob('*.c')):
@@ -111,4 +111,4 @@ if '--write-manifest' in sys.argv:
 else:
     stored = json.loads((ROOT/'hmi_page3_contract.json').read_text(encoding='utf-8'))
     assert stored == manifest, 'Stored HMI contract does not match the original file'
-print('PASS: CubeMX 200 kS/s dual ADC, Keil sources, immutable HMI hash and all page3 bindings')
+print('PASS: CubeMX 500 kS/s dual ADC, Keil sources, immutable HMI hash and all page3 bindings')

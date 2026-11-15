@@ -10,5 +10,5 @@ typedef struct {
 void Frequency_Init(FrequencyMeter *m);
 void Frequency_SetThreshold(FrequencyMeter *m, uint16_t mean, uint16_t span);
 int Frequency_Push(FrequencyMeter *m, uint16_t sample, uint32_t sample_index);
-float Frequency_FinishWindow(FrequencyMeter *m, uint32_t sample_rate);
+float Frequency_FinishWindow(FrequencyMeter *m, float sample_rate);
 #endif

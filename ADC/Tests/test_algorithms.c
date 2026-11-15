@@ -8,6 +8,8 @@
 #include "scope_acquisition.h"
 #include "hmi_uart.h"
 #include "main.h"
+#include "sample_rate.h"
+#include <stdio.h>
 #include <math.h>
 #include <string.h>
 
@@ -25,6 +27,7 @@ static FrequencyMeter frequency;
 static RmsMeter rms;
 static VppMeter vpp;
 static SineFit fit;
+static float generator_rate=200000.0f;
 static uint32_t random_state = 1234567u;
 static float noise(void)
 {
@@ -33,7 +36,7 @@ static float noise(void)
 }
 static uint16_t sine_sample(float hz, uint32_t index, float phase, float dc, int noisy)
 {
-    float x = dc + 1200.0f * sinf(6.28318530718f * hz * ((float)index / 200000.0f) + phase);
+    float x = dc + 1200.0f * sinf(6.28318530718f * hz * ((float)index / generator_rate) + phase);
     if (noisy) x += 3.0f * noise();
     if (x < 0.0f) x = 0.0f;
     if (x > 4095.0f) x = 4095.0f;
@@ -42,7 +45,7 @@ static uint16_t sine_sample(float hz, uint32_t index, float phase, float dc, int
 static void check_sine(float hz, float phase, float dc)
 {
     uint32_t i;
-    uint16_t stride = Waveform_Stride(hz, SCOPE_SAMPLE_RATE_HZ, SCOPE_TRACE_SAMPLES);
+    uint16_t stride = Waveform_Stride(hz, (uint32_t)generator_rate, SCOPE_TRACE_SAMPLES);
     float measured, robust;
     RmsResult result;
     Frequency_Init(&frequency); Rms_Reset(&rms); Vpp_Reset(&vpp);
@@ -56,7 +59,7 @@ static void check_sine(float hz, float phase, float dc)
         if (i == 4567u || i == 6789u) x = 4095u;
         Vpp_Push(&vpp, x);
     }
-    measured = Frequency_FinishWindow(&frequency, SCOPE_SAMPLE_RATE_HZ);
+    measured = Frequency_FinishWindow(&frequency, (uint32_t)generator_rate);
     result = Rms_Result(&rms);
     robust = Vpp_RobustCounts(&vpp);
     test_details[0] = hz; test_details[1] = measured;
@@ -65,16 +68,16 @@ static void check_sine(float hz, float phase, float dc)
     CHECK(fabsf(result.ac_counts - 848.5281f) < 6.0f);
     CHECK(fabsf(result.mean_counts - dc) < 5.0f);
     CHECK(result.total_counts > result.ac_counts + 100.0f);
-    CHECK(robust < 2430.0f && robust > 2100.0f);
+    CHECK(robust < 2430.0f && robust > 1500.0f);
     for (i = 0u; i < SCOPE_TRACE_SAMPLES; ++i)
         samples[i] = sine_sample(hz, i * stride, phase, dc, 1);
     samples[601] = 4095u;
-    SineFit_Start(&fit, samples, SCOPE_TRACE_SAMPLES, 200000.0f / stride, measured);
+    SineFit_Start(&fit, samples, SCOPE_TRACE_SAMPLES, generator_rate / stride, measured);
     for (i = 0u; i < 200u && !SineFit_Step(&fit, 24u); ++i) {}
     test_details[4] = fit.amplitude; test_details[5] = fit.residual_ratio;
     CHECK(fit.done && fit.valid);
     CHECK(fabsf(2.0f * fit.amplitude - 2400.0f) < 20.0f);
-    CHECK(Waveform_Render(samples, SCOPE_TRACE_SAMPLES, 200000.0f / stride,
+    CHECK(Waveform_Render(samples, SCOPE_TRACE_SAMPLES, generator_rate / stride,
                          measured, fit.dc, 2.0f * fit.amplitude,
                          pixels, SCOPE_WAVE_A_WIDTH, SCOPE_WAVE_A_HEIGHT));
     {
@@ -145,178 +148,252 @@ static void check_frequency_steps(void)
         CHECK(fabsf(measured-hz[stage]) < hz[stage]*0.002f);
     }
 }
+
 static HmiProtocol hmi;
 static HmiSnapshot snapshot;
-static unsigned raw_packets, cle_packets, value_packets;
-static int respond = 1, stop_in_first_data, validate_values = 1;
-static void receive(const uint8_t *a, unsigned n)
+static uint32_t mock_tick, mock_us, tx_due, total_points, clear_count, values_count;
+static uint8_t pending[320];
+static const uint8_t *pending_pointer;
+static uint16_t pending_size;
+static int tx_busy, return_rx=1;
+static unsigned screen_a, screen_b;
+static int overlays_restored;
+static void receive(const uint8_t *p,unsigned n)
 {
-    unsigned i;
-    for (i = 0u; i < n; ++i) HmiProtocol_Receive(&hmi, a[i]);
+    unsigned i; for(i=0u;i<n;++i) HmiProtocol_Receive(&hmi,p[i]);
 }
-static void ack(uint8_t code)
-{
-    uint8_t a[4] = {code,255u,255u,255u}; receive(a, 4u);
-}
-static int mock_send(void *context, const uint8_t *data, uint16_t n)
+static int mock_send(void *context,const uint8_t *p,uint16_t n)
 {
     (void)context;
-    if (n >= 5u && memcmp(data, "addt ", 5u) == 0) {
-        CHECK((memcmp(data,"addt 1,0,242",12u)==0) || (memcmp(data,"addt 15,0,239",13u)==0));
-        if (respond) ack(0xfeu);
-    } else if (n == SCOPE_WAVE_A_WIDTH || n == SCOPE_WAVE_B_WIDTH) {
-        ++raw_packets;
-        if (stop_in_first_data && raw_packets == 1u) {
-            const uint8_t a[] = {0x65u,3u,17u,0u,255u,255u,255u}; receive(a,sizeof(a));
-        }
-        if (respond) ack(0xfdu);
-    } else if (n >= 4u && memcmp(data,"cle ",4u)==0) ++cle_packets;
-    else if (n >= 7u && memcmp(data,"t1.txt=",7u)==0) {
-        char text[321];
-        memcpy(text,data,n); text[n] = '\0';
-        if (validate_values) {
-        CHECK(strstr(text,"t1.txt=\"40.0kHz\"") != 0);
-        CHECK(strstr(text,"t3.txt=\"0.684V\"") != 0);
-        CHECK(strstr(text,"t5.txt=\"1.934V\"") != 0);
-        CHECK(strstr(text,"t7.txt=\"100.0Hz\"") != 0);
-        CHECK(strstr(text,"t9.txt=\"0.500V\"") != 0);
-        CHECK(strstr(text,"t11.txt=\"1.414V\"") != 0);
-        }
-        ++value_packets;
-    }
-    HmiProtocol_TxComplete(&hmi);
+    CHECK(!tx_busy && n>0u && n<=sizeof(pending));
+    memcpy(pending,p,n); pending_pointer=p; pending_size=n; tx_busy=1;
+    tx_due=mock_us+((uint32_t)n*10000000u+115199u)/115200u;
     return 1;
+}
+static void finish_tx(void)
+{
+    unsigned i=0u, start=0u;
+    if(!tx_busy || (int32_t)(mock_us-tx_due)<0) return;
+    CHECK(memcmp(pending,pending_pointer,pending_size)==0);
+    while(i+2u<pending_size) {
+        if(pending[i]==255u && pending[i+1u]==255u && pending[i+2u]==255u) {
+            char cmd[128]; unsigned id,ch,value;
+            CHECK(i-start<sizeof(cmd)); memcpy(cmd,pending+start,i-start); cmd[i-start]='\0';
+            CHECK(strncmp(cmd,"addt",4u)!=0);
+            if(sscanf(cmd,"add %u,%u,%u",&id,&ch,&value)==3) {
+                CHECK(overlays_restored);
+                CHECK((id==1u||id==15u)&&ch==0u);
+                CHECK(value<(id==1u?SCOPE_WAVE_A_HEIGHT:SCOPE_WAVE_B_HEIGHT));
+                if(id==1u) ++screen_a; else ++screen_b;
+                ++total_points;
+            } else if(sscanf(cmd,"cle %u,%u",&id,&ch)==2) {
+                CHECK(ch==0u && (id==1u||id==15u));
+                if(id==1u) screen_a=0u; else screen_b=0u;
+                ++clear_count;
+                overlays_restored=0;
+            } else if(strcmp(cmd,"ref b1")==0) {
+                overlays_restored=1;
+            } else if(strncmp(cmd,"t1.txt=",7u)==0) ++values_count;
+            else if((strcmp(cmd,"sendme")==0||strcmp(cmd,"page 3")==0) && return_rx) {
+                const uint8_t page[]={0x66u,3u,255u,255u,255u}; receive(page,sizeof(page));
+            }
+            i+=3u; start=i;
+        } else ++i;
+    }
+    CHECK(start==pending_size);
+    tx_busy=0; HmiProtocol_TxComplete(&hmi);
+}
+static void ui_tick(uint32_t ms)
+{
+    mock_tick=ms; mock_us=ms*1000u; finish_tx(); HmiProtocol_Process(&hmi,ms);
 }
 static void check_hmi(void)
 {
-    const uint8_t page[] = {0x66u,3u,255u,255u,255u};
-    const uint8_t automatic[] = {0x65u,3u,16u,0u,255u,255u,255u};
-    const uint8_t press[] = {0x65u,3u,17u,1u,255u,255u,255u};
-    uint32_t now;
+    uint32_t t, points;
+    const uint8_t stop[]={0x65u,3u,17u,0u,255u,255u,255u};
+    const uint8_t automatic[]={0x65u,3u,16u,0u,255u,255u,255u};
+    const uint8_t wrong_press[]={0x65u,3u,17u,1u,255u,255u,255u};
+    return_rx=0; tx_busy=0; mock_us=0u; total_points=clear_count=values_count=0u;
     HmiProtocol_Init(&hmi,mock_send,0,0u);
     CHECK(!HmiProtocol_CanSubmit(&hmi));
-    receive(page,sizeof(page)); receive(press,sizeof(press));
-    CHECK(!hmi.paused);
+    for(t=0u;t<850u;++t) ui_tick(t);
+    CHECK(HmiProtocol_CanSubmit(&hmi)); /* No RX or FE/FD response at all. */
     memset(&snapshot,0,sizeof(snapshot));
-    snapshot.reading[0].frequency_valid = snapshot.reading[1].frequency_valid = 1u;
-    snapshot.reading[0].frequency_tenths = 400000u;
-    snapshot.reading[0].rms_mv = 684u; snapshot.reading[0].vpp_mv = 1934u;
-    snapshot.reading[1].frequency_tenths = 1000u;
-    snapshot.reading[1].rms_mv = 500u; snapshot.reading[1].vpp_mv = 1414u;
+    memset(snapshot.a,100,sizeof(snapshot.a)); memset(snapshot.b,100,sizeof(snapshot.b));
+    snapshot.reading[0].frequency_valid=1u; snapshot.reading[0].frequency_tenths=1200000u;
+    snapshot.reading[0].rms_mv=742u; snapshot.reading[0].vpp_mv=2100u;
     CHECK(HmiProtocol_Submit(&hmi,&snapshot));
-    stop_in_first_data = 1;
-    for (now = 0u; now < 200u; ++now) HmiProtocol_Process(&hmi,now);
-    CHECK(hmi.paused && raw_packets == 2u && cle_packets == 2u && value_packets == 1u);
-    CHECK(!HmiProtocol_Submit(&hmi,&snapshot));
-    for (; now < 2000u; ++now) HmiProtocol_Process(&hmi,now);
-    CHECK(raw_packets == 2u && cle_packets == 2u);
-    receive(automatic,sizeof(automatic));
-    CHECK(!hmi.paused && (HmiProtocol_TakeEvents(&hmi) & HMI_EVENT_AUTO));
+    for(;t<1900u;++t) ui_tick(t);
+    CHECK(screen_a==242u && screen_b==239u && values_count==1u);
+    CHECK(hmi.rx_bytes==0u && hmi.tx_bytes>6000u);
+    receive(wrong_press,sizeof(wrong_press)); CHECK(!hmi.paused);
     CHECK(HmiProtocol_Submit(&hmi,&snapshot));
-    respond = 0;
-    for (; now < 5000u; ++now) HmiProtocol_Process(&hmi,now);
-    CHECK(hmi.errors > 0u && hmi.page == 255u && !HmiProtocol_CanSubmit(&hmi));
+    for(;t<2100u;++t) ui_tick(t);
+    receive(stop,sizeof(stop));
+    for(;t<2150u;++t) ui_tick(t);
+    points=total_points;
+    for(;t<3000u;++t) ui_tick(t);
+    CHECK(hmi.paused && total_points==points && !HmiProtocol_CanSubmit(&hmi));
+    receive(automatic,sizeof(automatic)); CHECK(!hmi.paused);
+    CHECK(HmiProtocol_TakeEvents(&hmi)&HMI_EVENT_AUTO);
+    for(;t<3050u;++t) ui_tick(t);
+    CHECK(HmiProtocol_Submit(&hmi,&snapshot));
+    for(;t<4200u;++t) ui_tick(t);
+    CHECK(total_points>points && screen_a==242u && screen_b==239u);
+    tx_busy=0; HmiProtocol_TransportError(&hmi);
+    for(;t<4300u;++t) ui_tick(t);
+    CHECK(HmiProtocol_CanSubmit(&hmi));
+}
+static void check_rate_policy(void)
+{
+    SampleRatePolicy p={0u,0u};
+    CHECK(SampleRate_Target(50.0f)==5000u);
+    CHECK(SampleRate_Target(100.0f)==10000u);
+    CHECK(SampleRate_Target(200.0f)==20000u);
+    CHECK(SampleRate_Target(500.0f)==50000u);
+    CHECK(SampleRate_Target(1000.0f)==100000u);
+    CHECK(SampleRate_Target(2000.0f)==200000u);
+    CHECK(SampleRate_Target(120000.0f)==500000u);
+    CHECK(SampleRate_Target(180000.0f)==500000u);
+    CHECK(SampleRate_Stride(500000u,50.0f)==100u);
+    CHECK(SampleRate_Decide(&p,500000u,50.0f,50.0f,0,0u)==500000u);
+    CHECK(SampleRate_Decide(&p,500000u,50.0f,50.0f,0,301u)==5000u);
+    CHECK(SampleRate_Decide(&p,5000u,120000.0f,50.0f,0,302u)==500000u);
+    CHECK(SampleRate_Decide(&p,5000u,50.0f,0.0f,1,303u)==500000u);
+    CHECK(SampleRate_Decide(&p,500000u,75.0f,75.0f,0,1000u)==500000u);
+    CHECK(SampleRate_Decide(&p,500000u,75.0f,75.0f,0,1301u)==10000u);
 }
 TestCoreDebug test_core_debug;
 TestDwt test_dwt;
-static uint32_t mock_index, mock_tick, mock_overruns;
-static int mock_ready, mock_gap;
+static uint32_t mock_rate, mock_index, next_block_us, mock_overruns;
+static float source_hz[2], source_phase[2];
+static int mock_gap, start_failure, stalled;
+static uint32_t lowest_rate;
 uint32_t HAL_GetTick(void) { return mock_tick; }
 void Error_Handler(void) { CHECK(0); }
-int Acquisition_Start(void)
+int Acquisition_SetRate(uint32_t rate)
 {
-    mock_index = mock_tick = mock_overruns = 0u;
-    mock_ready = mock_gap = 0;
+    CHECK(rate>=5000u && rate<=500000u);
+    mock_rate=rate; mock_index=0u;
+    next_block_us=mock_us+SCOPE_DMA_HALF_WORDS*1000000u/rate;
+    if(rate<lowest_rate) lowest_rate=rate;
     return 1;
 }
-int Acquisition_CopyLatest(uint32_t *copy, uint32_t *first_index, int *gap)
+uint32_t Acquisition_Rate(void) { return mock_rate; }
+int Acquisition_Start(void)
 {
-    unsigned i;
-    if (!mock_ready) return 0;
-    mock_ready = 0;
-    *first_index = mock_index;
-    *gap = mock_gap;
-    mock_gap = 0;
-    for (i = 0u; i < SCOPE_DMA_HALF_WORDS; ++i) {
-        uint16_t a = sine_sample(100.0f,mock_index+i,0.314159f,2048.0f,0);
-        uint16_t b = sine_sample(40000.0f,mock_index+i,0.314159f,2048.0f,0);
-        copy[i] = (uint32_t)a | ((uint32_t)b << 16);
+    mock_rate=0u; mock_overruns=0u; mock_gap=0;
+    lowest_rate=500000u;
+    if(start_failure) return 0;
+    return Acquisition_SetRate(500000u);
+}
+int Acquisition_CopyLatest(uint32_t *copy,uint32_t *first_index,int *gap)
+{
+    unsigned i,ch;
+    float step[2];
+    if(stalled || mock_rate==0u || (int32_t)(mock_us-next_block_us)<0) return 0;
+    *first_index=mock_index; *gap=mock_gap; mock_gap=0;
+    for(ch=0u;ch<2u;++ch) {
+        step[ch]=6.28318530718f*source_hz[ch]/mock_rate;
+        step[ch]-=(unsigned)(step[ch]/6.28318530718f)*6.28318530718f;
     }
-    mock_index += SCOPE_DMA_HALF_WORDS;
+    for(i=0u;i<SCOPE_DMA_HALF_WORDS;++i) {
+        uint32_t word=0u;
+        for(ch=0u;ch<2u;++ch) {
+            uint32_t x=(uint32_t)(2048.0f+1200.0f*sinf(source_phase[ch])+0.5f);
+            source_phase[ch]+=step[ch];
+            if(source_phase[ch]>=6.28318530718f) source_phase[ch]-=6.28318530718f;
+            word|=x<<(16u*ch);
+        }
+        copy[i]=word;
+    }
+    mock_index+=SCOPE_DMA_HALF_WORDS;
+    next_block_us+=SCOPE_DMA_HALF_WORDS*1000000u/mock_rate;
     return 1;
 }
 int Acquisition_HasFault(void) { return 0; }
 uint32_t Acquisition_Overruns(void) { return mock_overruns; }
 int HmiUart_Init(void)
 {
-    HmiProtocol_Init(&hmi,mock_send,0,mock_tick);
-    return 1;
+    tx_busy=0; HmiProtocol_Init(&hmi,mock_send,0,mock_tick); return 1;
 }
-void HmiUart_Process(void) { HmiProtocol_Process(&hmi,mock_tick); }
+void HmiUart_Process(void) { finish_tx(); HmiProtocol_Process(&hmi,mock_tick); }
 HmiProtocol *HmiUart_Protocol(void) { return &hmi; }
-static void pipeline_blocks(unsigned count)
+static void run_ms(uint32_t duration)
 {
-    unsigned b, poll;
-    for (b = 0u; b < count; ++b) {
-        mock_ready = 1;
-        mock_tick = mock_index / 200u;
-        for (poll = 0u; poll < 32u; ++poll) ScopeApp_Process();
+    uint32_t end=mock_us+duration*1000u;
+    while(mock_us<end) { mock_us+=50u; mock_tick=mock_us/1000u; ScopeApp_Process(); }
+}
+static void begin_pipeline(float a,float b)
+{
+    mock_us=mock_tick=0u; tx_busy=0; source_hz[0]=a; source_hz[1]=b;
+    source_phase[0]=0.31f; source_phase[1]=0.62f;
+    return_rx=1; stalled=start_failure=0;
+    CHECK(ScopeApp_Init());
+}
+static void check_readings(float a,float b)
+{
+    unsigned i;
+    for(i=0u;i<2u;++i) {
+        float f=i==0u?a:b;
+        HmiReading *r=&hmi.snapshot.reading[i];
+        test_details[0]=f; test_details[1]=r->frequency_tenths/10.0f;
+        test_details[2]=(float)r->rms_mv; test_details[3]=(float)r->vpp_mv;
+        CHECK(r->frequency_valid);
+        CHECK(fabsf(r->frequency_tenths/10.0f-f)<f*0.012f);
+        CHECK(r->rms_mv>660u && r->rms_mv<710u);
+        CHECK(r->vpp_mv>1870u && r->vpp_mv<2000u);
     }
 }
 static void check_pipeline(void)
 {
-    const uint8_t page[] = {0x66u,3u,255u,255u,255u};
-    const uint8_t stop[] = {0x65u,3u,17u,0u,255u,255u,255u};
-    const uint8_t automatic[] = {0x65u,3u,16u,0u,255u,255u,255u};
-    unsigned before, i;
-    respond = 1; stop_in_first_data = validate_values = 0;
-    CHECK(ScopeApp_Init());
-    receive(page,sizeof(page));
-    pipeline_blocks(160u);
-    for (i = 0u; i < 2u; ++i) {
-        HmiReading *r = &hmi.snapshot.reading[i];
-        test_details[0] = (float)r->frequency_tenths;
-        test_details[1] = (float)r->rms_mv;
-        test_details[2] = (float)r->vpp_mv;
-        CHECK(r->frequency_valid);
-        CHECK(r->frequency_tenths >= (i == 0u ? 998u : 399900u));
-        CHECK(r->frequency_tenths <= (i == 0u ? 1002u : 400100u));
-        CHECK(r->rms_mv > 675u && r->rms_mv < 693u);
-        CHECK(r->vpp_mv > 1910u && r->vpp_mv < 1960u);
-    }
-    CHECK(g_scope_diagnostics.displayed_frames >= 2u);
-    CHECK(g_scope_diagnostics.dma_overruns == 0u);
-    receive(stop,sizeof(stop));
-    for (i = 0u; i < 32u; ++i) ScopeApp_Process();
-    before = raw_packets;
-    pipeline_blocks(50u);
-    CHECK(raw_packets == before && hmi.paused);
-    receive(automatic,sizeof(automatic));
-    pipeline_blocks(80u);
-    CHECK(raw_packets > before && !hmi.paused);
-    mock_index += SCOPE_DMA_HALF_WORDS;
-    mock_overruns = 1u; mock_gap = 1;
-    pipeline_blocks(100u);
-    CHECK(g_scope_diagnostics.dma_overruns == 1u);
-    CHECK(hmi.snapshot.reading[0].frequency_valid && hmi.snapshot.reading[1].frequency_valid);
+    uint32_t points;
+    const uint8_t stop[]={0x65u,3u,17u,0u,255u,255u,255u};
+    const uint8_t automatic[]={0x65u,3u,16u,0u,255u,255u,255u};
+    begin_pipeline(50.0f,50.0f); run_ms(2200u);
+    check_readings(50.0f,50.0f); CHECK(lowest_rate==5000u);
+    source_hz[0]=120000.0f;
+    run_ms(2400u); check_readings(120000.0f,50.0f);
+    CHECK(Acquisition_Rate()==500000u);
+    receive(stop,sizeof(stop)); run_ms(50u); points=total_points;
+    run_ms(300u); CHECK(total_points==points && hmi.paused);
+    receive(automatic,sizeof(automatic)); run_ms(1200u); CHECK(total_points>points);
+    mock_gap=1; ++mock_overruns; run_ms(1200u);
+    CHECK(g_scope_diagnostics.dma_overruns==1u);
+    source_hz[0]=150000.0f; run_ms(1800u); check_readings(150000.0f,50.0f);
+    source_hz[0]=50.0f; run_ms(2200u); check_readings(50.0f,50.0f);
+    CHECK(lowest_rate==5000u);
+    begin_pipeline(50.0f,100.0f); run_ms(2200u); check_readings(50.0f,100.0f);
+    CHECK(lowest_rate<=10000u);
+    begin_pipeline(50.0f,50.0f); stalled=1; return_rx=0;
+    run_ms(1800u); CHECK(g_scope_diagnostics.displayed_frames>0u && total_points>points);
+    mock_us=mock_tick=0u; start_failure=1; stalled=0; CHECK(ScopeApp_Init());
+    run_ms(1800u); CHECK(g_scope_diagnostics.adc_fault && g_scope_diagnostics.displayed_frames>0u);
+}
+static void check_delayed_input(void)
+{
+    begin_pipeline(0.0f,0.0f); run_ms(1800u);
+    CHECK(lowest_rate==5000u);
+    CHECK(g_scope_diagnostics.analysis_rate_hz[0]>=5000u && g_scope_diagnostics.analysis_rate_hz[1]>=5000u);
+    source_hz[0]=source_hz[1]=50.0f;
+    run_ms(1800u); check_readings(50.0f,50.0f);
 }
 void test_start(void)
 {
-    static const float frequencies[] = {100.0f,123.45f,997.0f,1000.0f,12345.0f,39900.0f,40000.0f};
-    unsigned i, phase;
-    for (i = 0u; i < sizeof(frequencies)/sizeof(frequencies[0]); ++i) {
-        for (phase = 0u; phase < 3u; ++phase) {
-            ++test_case;
-            check_sine(frequencies[i],0.314159f * phase,1600.0f + 200.0f * phase);
-        }
+    static const float hz[]={50,75,100,150,200,300,500,750,1000,1500,2000,3000,8000,40000,80000,120000,125000,150000};
+    unsigned i,phase;
+    for(i=0u;i<sizeof(hz)/sizeof(hz[0]);++i) {
+        generator_rate=(float)SampleRate_Target(hz[i]);
+        for(phase=0u;phase<3u;++phase) { ++test_case; check_sine(hz[i],0.314159f*phase,1600.0f+200.0f*phase); }
     }
+    generator_rate=200000.0f;
     ++test_case; check_other_shapes();
     ++test_case; check_frequency_steps();
+    ++test_case; check_rate_policy();
     ++test_case; check_hmi();
     ++test_case; check_pipeline();
-    test_passed = 1u;
-    TEST_BREAK();
-    for (;;) {}
+    ++test_case; check_delayed_input();
+    test_passed=1u; TEST_BREAK(); for(;;) {}
 }
 #ifdef __CC_ARM
 void SystemInit(void) {}

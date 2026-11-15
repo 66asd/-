@@ -4,7 +4,7 @@
 static int add_period(FrequencyMeter *m, uint32_t dt)
 {
     uint32_t cycles = 1u;
-    if (dt < (4u << 16) || dt > (9000u << 16)) return 0;
+    if (dt < (2u << 16) || dt > (12000u << 16)) return 0;
     if (m->nominal_q16 == 0u) m->nominal_q16 = dt;
     if (dt < m->nominal_q16 * 3u / 5u) return 0;
     if (dt > m->nominal_q16 * 8u / 5u) {
@@ -26,7 +26,7 @@ static void observe_edge(FrequencyMeter *m, uint32_t t)
             if (dt >= m->previous_edge_period * 3u / 4u
                 && dt <= m->previous_edge_period * 4u / 3u) ++m->outliers;
             else m->outliers = 1u;
-            if (m->outliers >= 3u && dt >= (4u << 16) && dt <= (3000u << 16)) {
+            if (m->outliers >= 3u && dt >= (2u << 16) && dt <= (12000u << 16)) {
                 /* Persistent adjacent-edge intervals identify a frequency step. */
                 m->nominal_q16 = dt;
                 m->period_sum_q16 = m->periods = 0u;
@@ -69,11 +69,16 @@ int Frequency_Push(FrequencyMeter *m, uint16_t x, uint32_t index)
     int crossed = 0;
     if (m->enabled && m->have_previous) {
         if ((int)x < (int)m->level - m->hysteresis) m->armed = 1u;
+        if (!m->candidate && m->armed && m->previous < m->level && x >= m->level) {
+            uint32_t frac = ((uint32_t)(m->level - m->previous) << 16)
+                          / (uint32_t)(x - m->previous);
+            m->candidate_q16 = ((index - 1u) << 16) + frac;
+            m->candidate = 1u;
+        }
         if (m->candidate) {
             if (x < m->level) m->candidate = 0u;
             else {
-                if (m->positive_count < 2u) ++m->positive_count;
-                if ((int)x >= (int)m->level + m->hysteresis && m->positive_count >= 2u) {
+                if ((int)x >= (int)m->level + m->hysteresis) {
                     uint32_t t = m->candidate_q16;
                     uint32_t dt = t - m->last_cross_q16;
                     m->candidate = m->armed = 0u;
@@ -87,20 +92,13 @@ int Frequency_Push(FrequencyMeter *m, uint16_t x, uint32_t index)
                 }
             }
         }
-        if (!m->candidate && m->armed && m->previous < m->level && x >= m->level) {
-            uint32_t frac = ((uint32_t)(m->level - m->previous) << 16)
-                          / (uint32_t)(x - m->previous);
-            /* Q16 time wraps every 65536 samples; subtraction is intentional. */
-            m->candidate_q16 = ((index - 1u) << 16) + frac;
-            m->candidate = m->positive_count = 1u;
-        }
     }
     m->previous = x;
     m->have_previous = 1u;
     return crossed;
 }
 
-float Frequency_FinishWindow(FrequencyMeter *m, uint32_t sample_rate)
+float Frequency_FinishWindow(FrequencyMeter *m, float sample_rate)
 {
     float hz = 0.0f;
     if (m->periods >= 2u && m->period_sum_q16 != 0u) {
