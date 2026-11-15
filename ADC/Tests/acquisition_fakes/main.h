@@ -7,6 +7,7 @@ typedef int HAL_StatusTypeDef;
 typedef struct { uint32_t CR2; } ADC_TypeDef;
 typedef struct { ADC_TypeDef *Instance; } ADC_HandleTypeDef;
 typedef struct { uint32_t Mode; } ADC_MultiModeTypeDef;
+typedef struct { uint32_t Channel,Rank,SamplingTime; } ADC_ChannelConfTypeDef;
 typedef struct { uint32_t PSC,ARR,CNT,SR,EGR; } TIM_TypeDef;
 typedef struct { TIM_TypeDef *Instance; struct { uint32_t Prescaler,Period; } Init; } TIM_HandleTypeDef;
 typedef struct { int busy; } DMA_HandleTypeDef;
@@ -21,6 +22,13 @@ extern RCC_TypeDef fake_rcc;
 #define TIM_FLAG_UPDATE 1u
 #define DMA_FLAG_GL1 1u
 #define ADC_DUALMODE_REGSIMULT 6u
+#define ADC_CHANNEL_0 0u
+#define ADC_CHANNEL_1 1u
+#define ADC_REGULAR_RANK_1 1u
+#define ADC_SAMPLETIME_7CYCLES_5 15u
+#define ADC_SAMPLETIME_41CYCLES_5 83u
+#define ADC_SAMPLETIME_71CYCLES_5 143u
+#define ADC_SAMPLETIME_239CYCLES_5 479u
 #define ADC_CR2_ADON 1u
 #define ADC_CR2_EXTTRIG (1u<<20)
 #define ADC_CR2_SWSTART (1u<<22)
@@ -35,6 +43,7 @@ HAL_StatusTypeDef HAL_TIM_Base_Stop(TIM_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_TIM_Base_Start(TIM_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_ADC_Stop(ADC_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_ADC_Start(ADC_HandleTypeDef *h);
+HAL_StatusTypeDef HAL_ADC_ConfigChannel(ADC_HandleTypeDef *h,ADC_ChannelConfTypeDef *c);
 HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_ADCEx_MultiModeStop_DMA(ADC_HandleTypeDef *h);
 HAL_StatusTypeDef HAL_ADCEx_MultiModeStart_DMA(ADC_HandleTypeDef *h,uint32_t *p,uint32_t n);

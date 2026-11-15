@@ -1,5 +1,6 @@
 #include "measure_frequency.h"
 #include <string.h>
+#include <math.h>
 
 static int add_period(FrequencyMeter *m, uint32_t dt)
 {
@@ -109,4 +110,49 @@ float Frequency_FinishWindow(FrequencyMeter *m, float sample_rate)
     m->period_sum_q16 = 0u;
     if (hz == 0.0f) { m->have_cross = m->have_edge = 0u; m->nominal_q16 = 0u; }
     return hz;
+}
+
+void FrequencyRefine_Start(FrequencyRefiner *m,uint16_t count,float frequency,float sample_rate)
+{
+    float angle=6.28318530718f*frequency/sample_rate;
+    memset(m,0,sizeof(*m));
+    m->count=count; m->frequency=frequency; m->sample_rate=sample_rate;
+    m->cosine=1073741824;
+    m->rotate_c=(int32_t)(cosf(angle)*1073741824.0f);
+    m->rotate_s=(int32_t)(sinf(angle)*1073741824.0f);
+}
+void FrequencyRefine_Push(FrequencyRefiner *m,uint16_t sample)
+{
+    FrequencyProjection *p=&m->half[m->index>=m->count/2u];
+    int32_t c=m->cosine>>15,s=m->sine>>15,y=(int32_t)sample-2048;
+    int32_t next_c=(int32_t)(((int64_t)m->cosine*m->rotate_c-(int64_t)m->sine*m->rotate_s)>>30);
+    m->sine=(int32_t)(((int64_t)m->sine*m->rotate_c+(int64_t)m->cosine*m->rotate_s)>>30);
+    m->cosine=next_c;
+    p->c+=c; p->s+=s; p->y+=y;
+    p->cc+=(int64_t)c*c; p->ss+=(int64_t)s*s; p->cs+=(int64_t)c*s;
+    p->yc+=(int64_t)y*c; p->ys+=(int64_t)y*s;
+    ++p->count; ++m->index;
+}
+static int projection(const FrequencyProjection *p,float *cosine,float *sine)
+{
+    float n=(float)p->count,c,s,y,cc,ss,cs,yc,ys,det;
+    if(n<16.0f) return 0;
+    c=p->c/32768.0f; s=p->s/32768.0f; y=(float)p->y;
+    cc=p->cc/1073741824.0f-c*c/n; ss=p->ss/1073741824.0f-s*s/n;
+    cs=p->cs/1073741824.0f-c*s/n;
+    yc=p->yc/32768.0f-y*c/n; ys=p->ys/32768.0f-y*s/n;
+    det=cc*ss-cs*cs;
+    if(det<n*n*0.001f) return 0;
+    *cosine=(yc*ss-ys*cs)/det; *sine=(ys*cc-yc*cs)/det;
+    return 1;
+}
+float FrequencyRefine_Result(const FrequencyRefiner *m)
+{
+    float c[2],s[2],delta,frequency;
+    if(!projection(&m->half[0],&c[0],&s[0]) || !projection(&m->half[1],&c[1],&s[1])) return m->frequency;
+    /* Separate DC terms reject baseline drift; phase slope refines noisy edge timing. */
+    delta=atan2f(c[1]*s[0]-s[1]*c[0],c[1]*c[0]+s[1]*s[0]);
+    frequency=m->frequency+delta*m->sample_rate/(3.14159265359f*m->count);
+    if(frequency<m->frequency*0.95f || frequency>m->frequency*1.05f) return m->frequency;
+    return frequency;
 }
