@@ -19,4 +19,5 @@
 - Exclude HMI binaries, vendor `ADC/Drivers/` dependencies, IDE session state,
   compiled outputs, credentials and unrelated projects.
 - Use the git-code-backup skill before source edits and before completion.
+- User override (2026-11-15): retain local before/after snapshots, but attempt remote upload only once per task at completion. If it fails, stop immediately; no retry, alternate backend, or follow-up network verification. Do not make a separate remote reservation push. Numbering is provisional until the single create-only upload succeeds.
 - Git commit identity authorized for this project: 66asd <66asd@users.noreply.github.com>.

@@ -124,3 +124,6 @@ if 'test_small_limits' in symbols:
 if 'test_small_pipeline_limits' in symbols:
     limits=struct.unpack('<4f',cpu.mem_read(symbols['test_small_pipeline_limits'],16))
     print('Simulated HMI 50/100 mV across probe cycles:', ', '.join(f'{limits[i]:.0f}..{limits[i+1]:.0f} mV' for i in (0,2)))
+if 'test_large_pipeline_limits' in symbols:
+    limits=struct.unpack('<2f',cpu.mem_read(symbols['test_large_pipeline_limits'],8))
+    print(f'Simulated 1 V HMI with other-channel pickup: {limits[0]:.0f}..{limits[1]:.0f} mV')

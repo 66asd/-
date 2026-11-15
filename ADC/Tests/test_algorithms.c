@@ -569,11 +569,33 @@ static void check_small_pipeline(void)
     }
     CHECK(mock_long_sampling);
 }
+volatile float test_large_pipeline_limits[2];
+static void check_large_with_pickup(void)
+{
+    unsigned t;
+    begin_pipeline(1000.0f,0.0f);
+    source_noise[0]=40.0f; source_noise[1]=20.0f;
+    source_amplitude[0]=500.0f*4095.0f/SCOPE_REFERENCE_MV;
+    source_amplitude[1]=0.0f;
+    run_ms(2000u);
+    for(t=0u;t<25u;++t) {
+        HmiReading *r;
+        run_ms(100u); r=&hmi.snapshot.reading[0];
+        test_details[0]=(float)r->vpp_mv;
+        test_details[1]=(float)mock_long_sampling;
+        test_details[2]=(float)Acquisition_SampleCyclesX2();
+        CHECK(!mock_long_sampling && Acquisition_SampleCyclesX2()==15u);
+        CHECK(r->frequency_valid && fabsf((float)r->vpp_mv-1000.0f)<15.0f);
+        if(t==0u || r->vpp_mv<test_large_pipeline_limits[0]) test_large_pipeline_limits[0]=(float)r->vpp_mv;
+        if(t==0u || r->vpp_mv>test_large_pipeline_limits[1]) test_large_pipeline_limits[1]=(float)r->vpp_mv;
+    }
+}
 
 void test_start(void)
 {
     static const float hz[]={50,75,100,150,200,300,500,750,1000,1500,2000,3000,8000,40000,80000,120000,125000,150000};
     unsigned i,phase;
+    ++test_case; check_large_with_pickup();
     ++test_case;
     Vpp_Reset(&vpp);
     for(i=0u;i<1024u;++i) Vpp_Push(&vpp,(uint16_t)(2040u+i%64u));

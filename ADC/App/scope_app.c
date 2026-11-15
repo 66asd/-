@@ -93,13 +93,15 @@ static void finish_trace(ScopeChannel *c, unsigned ch, uint32_t now)
         c->good_at = now;
     }
     if (!(c->frame_probe && c->valid &&
-          (c->measured_hz==0.0f || (c->peak_to_peak<=256.0f && c->frame_vpp<=256.0f &&
+          (c->measured_hz==0.0f || (c->peak_to_peak>0.0f &&
            (float)c->count*c->measured_hz<c->frame_rate*8.0f)))) {
         g_scope_diagnostics.raw_min[ch]=c->low;
         g_scope_diagnostics.raw_max[ch]=c->high;
         g_scope_diagnostics.vpp_raw_counts[ch]=c->frame_vpp;
         g_scope_diagnostics.vpp_fit_counts[ch]=c->fit.amplitude*2.0f;
         g_scope_diagnostics.vpp_used_fit[ch]=used_fit;
+        g_scope_diagnostics.vpp_fit_valid[ch]=c->fit.valid;
+        g_scope_diagnostics.vpp_fit_residual_ratio[ch]=c->fit.residual_ratio;
         g_scope_diagnostics.vpp_cycle_counts[ch]=c->cycle_vpp;
         g_scope_diagnostics.vpp_used_cycle[ch]=used_cycle;
         c->mean=mean; c->ac_rms=c->frame_rms; c->peak_to_peak=vpp;
@@ -224,11 +226,14 @@ void ScopeApp_Process(void)
             if(target!=Acquisition_Rate()) (void)change_rate(target);
         }
         {
-            uint8_t request=0u;
+            uint8_t request=0u,large=0u;
             float threshold=(long_sampling?200.0f:150.0f)*SCOPE_ADC_FULL_SCALE/SCOPE_REFERENCE_MV;
             for(i=0u;i<2u;++i)
-                if(channels[i].valid && channels[i].peak_to_peak>=20.0f &&
-                   channels[i].peak_to_peak<threshold) request=1u;
+                if(channels[i].valid && channels[i].peak_to_peak>=20.0f) {
+                    if(channels[i].peak_to_peak<threshold) request=1u;
+                    else large=1u;
+                }
+            if(large) request=0u;
             if(request!=long_sampling) {
                 if(!Acquisition_SetLongSampling(request)) g_scope_diagnostics.adc_fault=1u;
                 else {
