@@ -62,8 +62,9 @@ static int solve(SineFit *f)
     error = energy - f->cosine * yc - f->sine * ys;
     if (error < 0.0f) error = 0.0f;
     f->residual_ratio = energy > 0.0f ? error / energy : 1.0f;
+    /* Real ADC captures have ~0.39% residual energy; keep triangle/square rejection. */
     return f->amplitude >= 10.0f && f->amplitude < 2100.0f
-        && error <= energy * 0.0015f + n * 2.0f;
+        && error <= energy * 0.005f + n * 2.0f;
 }
 
 int SineFit_Step(SineFit *f, uint16_t budget)

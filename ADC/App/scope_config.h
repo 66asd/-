@@ -8,7 +8,7 @@
 #endif
 #define SCOPE_PROBE_INTERVAL_MS    1000u
 #define SCOPE_RATE_HOLD_MS         300u
-#define SCOPE_REFERENCE_MV         3300u /* Measure VDDA and calibrate this value. */
+#define SCOPE_REFERENCE_MV         3190u /* VDDA rail measured 3.19 V, 2026-11-15. */
 #define SCOPE_ADC_FULL_SCALE       4095u
 #define SCOPE_DMA_WORDS            1024u
 #define SCOPE_DMA_HALF_WORDS       (SCOPE_DMA_WORDS / 2u)

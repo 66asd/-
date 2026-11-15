@@ -43,14 +43,28 @@ def generate():
     original.write_text(text,encoding='utf-8')
     ET.indent(tree, space='  ')
     for name, points in VERSIONS:
-        variant = copy.deepcopy(tree)
+        project_path = MDK / f'{name}.uvprojx'
+        existed = project_path.exists()
+        variant = ET.parse(project_path) if existed else copy.deepcopy(tree)
+        previous_xml = ET.tostring(variant.getroot())
         defines = variant.find('.//Cads/VariousControls/Define')
         values = [v for v in defines.text.split(',') if not v.startswith('SCOPE_TARGET_POINTS=')]
         defines.text = ','.join(values + [f'SCOPE_TARGET_POINTS={points}'])
         variant.find('.//TargetCommonOption/OutputDirectory').text = f'..\\build\\{name}\\'
         variant.find('.//TargetCommonOption/OutputName').text = name
-        variant.write(MDK / f'{name}.uvprojx', encoding='utf-8', xml_declaration=True)
+        variant.find('.//CreateHexFile').text = '0'
+        variant.find('.//Utilities/Flash2').text = DRIVER
+        original_app = next(g for g in tree.findall('.//Group') if g.findtext('GroupName')=='Scope Application')
+        app = next(g for g in variant.findall('.//Group') if g.findtext('GroupName')=='Scope Application')
+        if [p.text for p in app.findall('.//FilePath')] != [p.text for p in original_app.findall('.//FilePath')]:
+            app.remove(app.find('Files'))
+            app.append(copy.deepcopy(original_app.find('Files')))
+        if not existed or ET.tostring(variant.getroot()) != previous_xml:
+            variant.write(project_path, encoding='utf-8', xml_declaration=True)
         # Only debugger configuration; no window state, probe serial or breakpoints.
+        # Preserve settings saved by Keil, including the user's selected probe.
+        if (MDK / f'{name}.uvoptx').exists():
+            continue
         opt = ET.Element('ProjectOpt')
         ET.SubElement(opt, 'SchemaVersion').text = '1.0'
         ET.SubElement(opt, 'Header').text = '### uVision Project, (C) Keil Software'

@@ -107,4 +107,11 @@ print('PASS: raw ADC1 identity, ordering, UART mode switching, retry and timeout
 
 if 'test_vpp_comparison' in symbols:
     values=struct.unpack('<3f',cpu.mem_read(symbols['test_vpp_comparison'],12))
-    print('Synthetic 1 kHz / 1 Vpp comparison (mV), 20k / 100k / 500k S/s:', ', '.join(f'{x:.3f}' for x in values))
+    print('Synthetic 1 kHz / 1 Vpp at 3.3V reference (mV), 20k / 100k / 500k S/s:', ', '.join(f'{x:.3f}' for x in values))
+if 'test_real_comparison' in symbols:
+    rows=struct.unpack('<16f',cpu.mem_read(symbols['test_real_comparison'],64))
+    for i,seg in enumerate((3407,3408)):
+        hz,raw,fitted,valid,residual,selected,used,mv=rows[i*8:(i+1)*8]
+        print(f'Recorded {seg}: Hz={hz:.6f}, robust={raw:.6f}, fitted={fitted:.6f}, '
+              f'valid={valid:.0f}, residual={residual:.6f}, selected={selected:.6f}, '
+              f'used_fit={used:.0f}, Vpp@3.19V={mv:.6f} mV')

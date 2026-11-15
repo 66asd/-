@@ -102,7 +102,10 @@ for name, points in [('ADC',None),('ADC_1k_20k',16),('ADC_1k_100k',64)]:
     project = ET.parse(ROOT/f'MDK-ARM/{name}.uvprojx')
     assert project.find('.//CreateHexFile').text == '0', f'HEX output forbidden: {name}'
     assert project.find('.//Utilities/Flash2').text == 'Segger\\JL2CM3.dll'
-    assert project.find('.//TargetDlls/Driver').text == 'Segger\\JL2CM3.dll'
+    driver = project.find('.//TargetDlls/Driver')
+    # Keil may move/remove this legacy project field when saving; uvoptx selects the probe.
+    if driver is not None:
+        assert driver.text == 'Segger\\JL2CM3.dll'
     paths = [p.text.replace('\\','/') for p in project.findall('.//FilePath')]
     for source in sorted((ROOT/'App').glob('*.c')):
         assert paths.count('../App/'+source.name) == 1, f'{name} does not include {source.name}'
@@ -114,8 +117,9 @@ for name, points in [('ADC',None),('ADC_1k_20k',16),('ADC_1k_100k',64)]:
         assert project.find('.//OutputDirectory').text == f'..\\build\\{name}\\'
         options = ET.parse(ROOT/f'MDK-ARM/{name}.uvoptx')
         assert options.find('.//DebugOpt/pMon').text == 'Segger\\JL2CM3.dll'
-        assert options.find('.//SetRegEntry/Key').text == 'JL2CM3'
-        assert '-FL010000' in options.find('.//SetRegEntry/Name').text
+        entries = [e for e in options.findall('.//SetRegEntry') if e.findtext('Key')=='JL2CM3']
+        assert len(entries) == 1, 'Missing or ambiguous J-Link flash configuration'
+        assert '-FL010000' in entries[0].findtext('Name')
 manifest = {'hmi_file':HMI.name, 'sha256':digest, 'baud':115200, 'page':3, 'objects':objects}
 if '--write-manifest' in sys.argv:
     (ROOT/'hmi_page3_contract.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')

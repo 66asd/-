@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
+#include "captured_sine.inc"
 
 volatile uint32_t test_failed_line, test_case, test_passed;
 volatile float test_details[8];
@@ -341,7 +342,7 @@ static void begin_pipeline(float a,float b)
 {
     mock_us=mock_tick=0u; tx_busy=0; source_hz[0]=a; source_hz[1]=b;
     source_phase[0]=0.31f; source_phase[1]=0.62f;
-    source_amplitude[0]=source_amplitude[1]=1200.0f;
+    source_amplitude[0]=source_amplitude[1]=1200.0f*3300.0f/SCOPE_REFERENCE_MV;
     return_rx=1; stalled=start_failure=0;
     CHECK(ScopeApp_Init());
 }
@@ -425,7 +426,7 @@ static void check_one_volt(unsigned rate_index)
 }
 static void check_single_channel(void)
 {
-    float amplitude=0.5f*4095.0f/3.3f;
+    float amplitude=500.0f*SCOPE_ADC_FULL_SCALE/SCOPE_REFERENCE_MV;
     begin_pipeline(1000.0f,1000.0f);
     source_amplitude[0]=0.0f; source_amplitude[1]=amplitude;
     run_ms(2400u);
@@ -446,10 +447,59 @@ static void check_single_channel(void)
     CHECK(strcmp(screen_text[11],"0.000V")==0 && strcmp(screen_text[5],"0.000V")!=0);
 }
 
+volatile float test_real_comparison[2][8];
+static void check_distorted_sine(unsigned shape)
+{
+    unsigned i;
+    for(i=0u;i<SCOPE_TRACE_SAMPLES;++i) {
+        float a=6.28318530718f*1000.0f*i/20000.0f;
+        float y=1200.0f*sinf(a);
+        if(shape==0u) {
+            if(y>960.0f) y=960.0f;
+            if(y< -960.0f) y= -960.0f;
+        } else y+=120.0f*sinf(3.0f*a);
+        samples[i]=(uint16_t)(2048.0f+y+0.5f);
+    }
+    SineFit_Start(&fit,samples,SCOPE_TRACE_SAMPLES,20000.0f,1000.0f);
+    while(!SineFit_Step(&fit,24u)) {}
+    CHECK(!fit.valid);
+}
+static void check_real_capture(unsigned which)
+{
+    const uint16_t *x=which==0u?capture_3407:capture_3408;
+    unsigned n=which==0u?sizeof(capture_3407)/sizeof(capture_3407[0]):sizeof(capture_3408)/sizeof(capture_3408[0]);
+    unsigned i;
+    uint8_t used;
+    float hz,raw,selected;
+    RmsResult r;
+    Rms_Reset(&rms); Vpp_Reset(&vpp);
+    for(i=0u;i<n;++i) { Rms_Push(&rms,x[i]); Vpp_Push(&vpp,x[i]); }
+    r=Rms_Result(&rms); raw=Vpp_RobustCounts(&vpp);
+    Frequency_Init(&frequency);
+    Frequency_SetThreshold(&frequency,(uint16_t)(r.mean_counts+0.5f),(uint16_t)raw);
+    for(i=0u;i<n;++i) (void)Frequency_Push(&frequency,x[i],i);
+    hz=Frequency_FinishWindow(&frequency,20000.0f);
+    SineFit_Start(&fit,x,(uint16_t)n,20000.0f,hz);
+    while(!SineFit_Step(&fit,24u)) {}
+    selected=Vpp_SelectCounts(raw,fit.amplitude*2.0f,fit.valid,hz,20000.0f,&used);
+    test_details[0]=hz; test_details[1]=raw; test_details[2]=fit.amplitude*2.0f;
+    test_details[3]=(float)fit.valid; test_details[4]=fit.residual_ratio;
+    test_details[5]=selected; test_details[6]=(float)used;
+    for(i=0u;i<7u;++i) test_real_comparison[which][i]=test_details[i];
+    test_real_comparison[which][7]=selected*3190.0f/4095.0f;
+    CHECK(hz>995.0f && hz<1005.0f);
+    CHECK(fit.valid && used);
+    CHECK(raw>1335.0f && raw<1350.0f);
+    CHECK(selected>1250.0f && selected<1280.0f);
+    CHECK(fit.residual_ratio>0.003f && fit.residual_ratio<0.005f);
+}
+
 void test_start(void)
 {
     static const float hz[]={50,75,100,150,200,300,500,750,1000,1500,2000,3000,8000,40000,80000,120000,125000,150000};
     unsigned i,phase;
+    for(i=0u;i<2u;++i) { ++test_case; check_real_capture(i); }
+    for(i=0u;i<2u;++i) { ++test_case; check_distorted_sine(i); }
     for(i=0u;i<sizeof(hz)/sizeof(hz[0]);++i) {
         generator_rate=(float)SampleRate_Target(hz[i]);
         for(phase=0u;phase<3u;++phase) { ++test_case; check_sine(hz[i],0.314159f*phase,1600.0f+200.0f*phase); }
